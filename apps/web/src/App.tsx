@@ -25,10 +25,10 @@ import {
 } from "react";
 import { ApiError, createClient } from "./api";
 import type { PhysicsParameters } from "./PhysicsLab";
+import type { SomatotopicToken } from "./physics";
 import type { PatchProposal, Project, SceneObject, SourceRecord, Transform } from "./types";
 
 const SpatialScene = lazy(() => import("./SpatialScene"));
-
 type ApiState = "checking" | "online" | "offline";
 
 function PanelTitle({ icon, children }: { icon: ReactNode; children: ReactNode }) {
@@ -57,29 +57,37 @@ export default function App() {
   const [time, setTime] = useState(0.38);
   const [physicsMode, setPhysicsMode] = useState(true);
   const [physics, setPhysics] = useState<PhysicsParameters>({
-    waveSpeed: 2.4,
-    damping: 1.1,
-    impulse: 0.75,
+    waveSpeedX: 42,
+    waveSpeedY: 28,
+    damping: 9,
+    impactEnergyJoules: 0.02,
+    conversionEfficiency: 0.18,
+    wakeThresholdJoules: 0.001,
+    detectionThreshold: 0.0015,
+    boundary: "reflective",
+    sensitivityGain: 1,
     paused: false,
     resetVersion: 0,
   });
-  const [telemetry, setTelemetry] = useState({ energy: 0, steps: 0, fps: 0 });
+  const [telemetry, setTelemetry] = useState({
+    energy: 0,
+    harvestedJoules: 0,
+    awake: false,
+    token: null as SomatotopicToken | null,
+    steps: 0,
+    fps: 0,
+  });
 
   const showError = useCallback((cause: unknown) => {
     setError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : "Unexpected error");
   }, []);
 
   const refreshProject = useCallback(async (projectId: string) => {
-    const [nextProject, nextSources] = await Promise.all([
-      api.getProject(projectId),
-      api.listSources(projectId),
-    ]);
+    const [nextProject, nextSources] = await Promise.all([api.getProject(projectId), api.listSources(projectId)]);
     setProject(nextProject);
     setSources(nextSources);
     setProjects((current) => current.map((item) => item.id === nextProject.id ? nextProject : item));
-    if (selected) {
-      setSelected(nextProject.current_scene.objects.find((item) => item.id === selected.id) ?? null);
-    }
+    if (selected) setSelected(nextProject.current_scene.objects.find((item) => item.id === selected.id) ?? null);
   }, [api, selected]);
 
   useEffect(() => {
@@ -92,10 +100,7 @@ export default function App() {
         setApiState("online");
         setProjects(items);
         if (items[0]) {
-          const [restoredProject, restoredSources] = await Promise.all([
-            api.getProject(items[0].id),
-            api.listSources(items[0].id),
-          ]);
+          const [restoredProject, restoredSources] = await Promise.all([api.getProject(items[0].id), api.listSources(items[0].id)]);
           if (!active) return;
           setProject(restoredProject);
           setSources(restoredSources);
@@ -132,8 +137,7 @@ export default function App() {
     setBusy(true); setError("");
     try {
       await refreshProject(projectId);
-      setSelected(null); setPendingPatch(null);
-      setMessage("Project loaded.");
+      setSelected(null); setPendingPatch(null); setMessage("Project loaded.");
     } catch (cause) { showError(cause); } finally { setBusy(false); }
   }
 
@@ -168,8 +172,7 @@ export default function App() {
     setBusy(true); setError("");
     try {
       const patch = await api.previewTransform(project, selected.id, draftTransform);
-      setPendingPatch(patch);
-      setMessage("Revision-bound patch ready for human approval.");
+      setPendingPatch(patch); setMessage("Revision-bound patch ready for human approval.");
     } catch (cause) { showError(cause); } finally { setBusy(false); }
   }
 
@@ -181,8 +184,7 @@ export default function App() {
       setProject(updated);
       setProjects((current) => current.map((item) => item.id === updated.id ? updated : item));
       setSelected(updated.current_scene.objects.find((item) => item.id === selected?.id) ?? null);
-      setPendingPatch(null);
-      setMessage(`Patch applied. Scene revision is now ${updated.current_scene.revision}.`);
+      setPendingPatch(null); setMessage(`Patch applied. Scene revision is now ${updated.current_scene.revision}.`);
     } catch (cause) { showError(cause); } finally { setBusy(false); }
   }
 
@@ -204,79 +206,64 @@ export default function App() {
         <div className="brand"><span className="brand-mark">K</span><div><strong>KOREV LABS 3D</strong><small>Spatial knowledge engineering</small></div></div>
         <div className="status-row">
           <select value={project?.id ?? ""} onChange={(event) => void selectProject(event.target.value)} disabled={busy || projects.length === 0}>
-            <option value="">No project</option>
-            {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            <option value="">No project</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
           <button className="ghost" onClick={() => void createProject()} disabled={busy || apiState !== "online"}><Plus size={15} /> New project</button>
-          <button className={physicsMode ? "mode active" : "mode"} onClick={() => setPhysicsMode((value) => !value)}><Activity size={15} /> Physics Lab</button>
+          <button className={physicsMode ? "mode active" : "mode"} onClick={() => setPhysicsMode((value) => !value)}><Activity size={15} /> Somatosensory Lab</button>
           <span className={`api-state ${apiState}`}>{apiState === "online" ? "API connected" : apiState}</span>
-          <span className="maturity"><ShieldCheck size={14} /> {project?.maturity ?? "conceptual"}</span>
+          <span className="maturity"><ShieldCheck size={14} /> conceptual</span>
           <button onClick={() => void spatializeAll()} disabled={busy || !project || sources.length === 0}>{busy ? <Loader2 className="spin" size={15} /> : <Braces size={15} />} Spatialize all</button>
         </div>
       </header>
 
       <aside className="left-panel">
         <PanelTitle icon={<Box size={16} />}>Scene graph</PanelTitle>
-        <div className="tree">
-          {objects.length === 0 && <div className="empty-card">The scene is empty. Import a source to build it.</div>}
-          {objects.map((object) => (
-            <button key={object.id} className={`tree-row ${selected?.id === object.id ? "selected" : ""}`} onClick={() => setSelected(object)}>
-              <CircleDot size={13} /><span>{object.label}</span><small>{object.kind}</small>
-            </button>
-          ))}
-        </div>
+        <div className="tree">{objects.length === 0 && <div className="empty-card">The scene is empty. Import a source to build it.</div>}{objects.map((object) => <button key={object.id} className={`tree-row ${selected?.id === object.id ? "selected" : ""}`} onClick={() => setSelected(object)}><CircleDot size={13} /><span>{object.label}</span><small>{object.kind}</small></button>)}</div>
         <PanelTitle icon={<FileBox size={16} />}>Sources</PanelTitle>
         <label className={`upload ${!project || busy ? "disabled" : ""}`}><Upload size={15} /> Import PDF, Python, OBJ or GLB<input type="file" accept=".pdf,.py,.obj,.glb" multiple disabled={!project || busy} onChange={(event) => void uploadFiles(event)} /></label>
-        <div className="source-list">
-          {sources.map((source) => <button key={source.id} onClick={() => setMessage(JSON.stringify(source.analysis, null, 2))}><strong>{source.filename}</strong><span>{source.kind.toUpperCase()} · {formatBytes(source.size_bytes)}</span><em>{source.status}</em></button>)}
-        </div>
+        <div className="source-list">{sources.map((source) => <button key={source.id} onClick={() => setMessage(JSON.stringify(source.analysis, null, 2))}><strong>{source.filename}</strong><span>{source.kind.toUpperCase()} · {formatBytes(source.size_bytes)}</span><em>{source.status}</em></button>)}</div>
       </aside>
 
       <section className="viewport">
         <Suspense fallback={<div className="viewport-loading"><Loader2 className="spin" />Loading 3D engine…</div>}>
-          <SpatialScene
-            objects={objects}
-            selectedId={selected?.id ?? null}
-            onSelect={setSelected}
-            assetUrl={(sourceId) => project ? api.assetUrl(project.id, sourceId) : ""}
-            time={time}
-            physicsMode={physicsMode}
-            physicsParameters={physics}
-            onTelemetry={(energy, steps, fps) => setTelemetry({ energy, steps, fps })}
-          />
+          <SpatialScene objects={objects} selectedId={selected?.id ?? null} onSelect={setSelected} assetUrl={(sourceId) => project ? api.assetUrl(project.id, sourceId) : ""} time={time} physicsMode={physicsMode} physicsParameters={physics} onTelemetry={(energy, harvestedJoules, awake, token, steps, fps) => setTelemetry({ energy, harvestedJoules, awake, token, steps, fps })} />
         </Suspense>
-        <div className="viewport-label"><span>Revision {project?.current_scene.revision ?? 0}</span><span>{physicsMode ? "52 × 34 field" : `${objects.length} objects`}</span><span>{physicsMode ? "120 Hz solver" : "Source-driven"}</span></div>
-        {physicsMode && <div className="physics-hint">Click the membrane to inject a physical impulse</div>}
+        <div className="viewport-label"><span>Revision {project?.current_scene.revision ?? 0}</span><span>{physicsMode ? "48 receptors" : `${objects.length} objects`}</span><span>{physicsMode ? "1 kHz causal solver" : "Source-driven"}</span></div>
+        {physicsMode && <div className="physics-hint">Click the substrate to inject an energy-bounded physical event</div>}
         {apiState === "offline" && <div className="offline-overlay"><strong>API unavailable</strong><span>Start the FastAPI service on {apiUrl}.</span></div>}
       </section>
 
       <aside className="right-panel">
         {physicsMode ? <>
-          <PanelTitle icon={<Activity size={16} />}>Physics laboratory</PanelTitle>
-          <h2>Damped membrane</h2>
-          <dl><div><dt>Solver</dt><dd>finite difference</dd></div><div><dt>Grid</dt><dd>52 × 34</dd></div><div><dt>Frequency</dt><dd>120 Hz fixed</dd></div><div><dt>Render</dt><dd>{telemetry.fps.toFixed(0)} fps</dd></div><div><dt>Steps</dt><dd>{telemetry.steps}</dd></div><div><dt>Energy</dt><dd className="gold">{telemetry.energy.toFixed(4)}</dd></div></dl>
+          <PanelTitle icon={<Activity size={16} />}>Causal somatosensory system</PanelTitle>
+          <h2>Energy → perception</h2>
+          <dl>
+            <div><dt>State</dt><dd className={telemetry.awake ? "gold" : ""}>{telemetry.awake ? "AWAKE" : "DORMANT"}</dd></div>
+            <div><dt>Mechanical energy</dt><dd>{telemetry.energy.toExponential(2)}</dd></div>
+            <div><dt>Harvested</dt><dd className="gold">{(telemetry.harvestedJoules * 1000).toFixed(3)} mJ</dd></div>
+            <div><dt>Wake threshold</dt><dd>{(physics.wakeThresholdJoules * 1000).toFixed(2)} mJ</dd></div>
+            <div><dt>Localized</dt><dd>{telemetry.token ? `${(telemetry.token.bodyCoordinates[0] * 100).toFixed(0)}%, ${(telemetry.token.bodyCoordinates[1] * 100).toFixed(0)}%` : "pending"}</dd></div>
+            <div><dt>Confidence</dt><dd>{telemetry.token ? telemetry.token.confidence.toFixed(2) : "—"}</dd></div>
+            <div><dt>Solver</dt><dd>1 kHz</dd></div>
+          </dl>
           <div className="physics-controls">
-            <label><span>Wave speed <b>{physics.waveSpeed.toFixed(1)}</b></span><input type="range" min="0.4" max="4.5" step="0.1" value={physics.waveSpeed} onChange={(event) => setPhysics((value) => ({ ...value, waveSpeed: Number(event.target.value) }))} /></label>
-            <label><span>Damping <b>{physics.damping.toFixed(2)}</b></span><input type="range" min="0" max="4" step="0.05" value={physics.damping} onChange={(event) => setPhysics((value) => ({ ...value, damping: Number(event.target.value) }))} /></label>
-            <label><span>Impulse <b>{physics.impulse.toFixed(2)}</b></span><input type="range" min="0.1" max="2" step="0.05" value={physics.impulse} onChange={(event) => setPhysics((value) => ({ ...value, impulse: Number(event.target.value) }))} /></label>
+            <label><span>Wave X <b>{physics.waveSpeedX.toFixed(0)} m/s</b></span><input type="range" min="5" max="100" step="1" value={physics.waveSpeedX} onChange={(event) => setPhysics((value) => ({ ...value, waveSpeedX: Number(event.target.value) }))} /></label>
+            <label><span>Wave Y <b>{physics.waveSpeedY.toFixed(0)} m/s</b></span><input type="range" min="5" max="100" step="1" value={physics.waveSpeedY} onChange={(event) => setPhysics((value) => ({ ...value, waveSpeedY: Number(event.target.value) }))} /></label>
+            <label><span>Impact energy <b>{(physics.impactEnergyJoules * 1000).toFixed(1)} mJ</b></span><input type="range" min="0.001" max="0.1" step="0.001" value={physics.impactEnergyJoules} onChange={(event) => setPhysics((value) => ({ ...value, impactEnergyJoules: Number(event.target.value) }))} /></label>
+            <label><span>Conversion <b>{(physics.conversionEfficiency * 100).toFixed(0)}%</b></span><input type="range" min="0.01" max="0.5" step="0.01" value={physics.conversionEfficiency} onChange={(event) => setPhysics((value) => ({ ...value, conversionEfficiency: Number(event.target.value) }))} /></label>
+            <label><span>Efferent sensitivity <b>{physics.sensitivityGain.toFixed(2)}×</b></span><input type="range" min="0.25" max="4" step="0.05" value={physics.sensitivityGain} onChange={(event) => setPhysics((value) => ({ ...value, sensitivityGain: Number(event.target.value) }))} /></label>
+            <label><span>Boundary</span><select value={physics.boundary} onChange={(event) => setPhysics((value) => ({ ...value, boundary: event.target.value as PhysicsParameters["boundary"] }))}><option value="fixed">fixed</option><option value="reflective">reflective</option><option value="absorbing">absorbing</option></select></label>
           </div>
           <div className="physics-actions"><button onClick={() => setPhysics((value) => ({ ...value, paused: !value.paused }))}>{physics.paused ? <Play size={14} /> : <Pause size={14} />}{physics.paused ? "Resume" : "Pause"}</button><button onClick={() => setPhysics((value) => ({ ...value, resetVersion: value.resetVersion + 1 }))}><RotateCcw size={14} />Reset</button></div>
-          <div className="provenance"><strong>Physical scope</strong><p>Stable two-dimensional wave equation, fixed boundaries, viscous damping and Gaussian impulses. This is a computational model, not a calibrated material law.</p></div>
+          <div className="provenance"><strong>Patent scope implemented</strong><p>Energy-bounded impact, anisotropic propagation, distributed receptors, TDOA-style localization, autonomous wake threshold, somatotopic token and efferent sensitivity modulation. This remains a conceptual simulator until calibrated against a physical prototype.</p></div>
         </> : <>
-        <PanelTitle icon={<CircleDot size={16} />}>Inspector</PanelTitle>
-        {selected ? <>
-          <h2>{selected.label}</h2>
-          <dl><div><dt>Type</dt><dd>{selected.kind}</dd></div><div><dt>Origin</dt><dd>{selected.inferred ? "Inferred" : "Extracted"}</dd></div><div><dt>Sources</dt><dd>{selected.source_refs.length}</dd></div></dl>
-          <div className="coordinates"><label>X<input type="number" step="0.1" value={draftTransform?.position[0] ?? 0} onChange={(event) => updatePosition(0, event.target.value)} /></label><label>Y<input type="number" step="0.1" value={draftTransform?.position[1] ?? 0} onChange={(event) => updatePosition(1, event.target.value)} /></label><label>Z<input type="number" step="0.1" value={draftTransform?.position[2] ?? 0} onChange={(event) => updatePosition(2, event.target.value)} /></label></div>
-          <div className="provenance"><strong>Provenance</strong>{selected.source_refs.length ? selected.source_refs.map((ref) => <p key={`${ref.source_sha256}-${ref.locator}`}>{ref.locator} · {ref.method} · {(ref.confidence * 100).toFixed(0)}%</p>) : <p>No source attached.</p>}</div>
-          <PanelTitle icon={<GitCompare size={16} />}>Controlled edit</PanelTitle>
-          <div className="patch-card"><span>{pendingPatch ? "Patch previewed" : "Preview required"}</span><p>{pendingPatch ? `Bound to revision ${pendingPatch.request.base_revision}.` : "Coordinates are never written before an explicit preview and approval."}</p><button onClick={() => void (pendingPatch ? applyPatch() : previewTransform())} disabled={busy}>{pendingPatch ? "Approve and apply" : "Preview transform patch"}</button></div>
-        </> : <div className="empty-card">Select an object in the scene or scene graph to inspect its provenance and edit it.</div>}
+          <PanelTitle icon={<CircleDot size={16} />}>Inspector</PanelTitle>
+          {selected ? <><h2>{selected.label}</h2><dl><div><dt>Type</dt><dd>{selected.kind}</dd></div><div><dt>Origin</dt><dd>{selected.inferred ? "Inferred" : "Extracted"}</dd></div><div><dt>Sources</dt><dd>{selected.source_refs.length}</dd></div></dl><div className="coordinates"><label>X<input type="number" step="0.1" value={draftTransform?.position[0] ?? 0} onChange={(event) => updatePosition(0, event.target.value)} /></label><label>Y<input type="number" step="0.1" value={draftTransform?.position[1] ?? 0} onChange={(event) => updatePosition(1, event.target.value)} /></label><label>Z<input type="number" step="0.1" value={draftTransform?.position[2] ?? 0} onChange={(event) => updatePosition(2, event.target.value)} /></label></div><div className="provenance"><strong>Provenance</strong>{selected.source_refs.length ? selected.source_refs.map((ref) => <p key={`${ref.source_sha256}-${ref.locator}`}>{ref.locator} · {ref.method} · {(ref.confidence * 100).toFixed(0)}%</p>) : <p>No source attached.</p>}</div><PanelTitle icon={<GitCompare size={16} />}>Controlled edit</PanelTitle><div className="patch-card"><span>{pendingPatch ? "Patch previewed" : "Preview required"}</span><p>{pendingPatch ? `Bound to revision ${pendingPatch.request.base_revision}.` : "Coordinates are never written before an explicit preview and approval."}</p><button onClick={() => void (pendingPatch ? applyPatch() : previewTransform())} disabled={busy}>{pendingPatch ? "Approve and apply" : "Preview transform patch"}</button></div></> : <div className="empty-card">Select an object in the scene or scene graph to inspect its provenance and edit it.</div>}
         </>}
         {(error || message) && <pre className={error ? "event error" : "event"}>{error || message}</pre>}
       </aside>
 
-      <footer className="timeline">{physicsMode ? <><span>Physics field</span><div className="live-indicator"><i />{physics.paused ? "Paused" : "Live"}</div><span>{telemetry.steps} steps</span></> : <><span>0</span><input aria-label="Spatial timeline" type="range" min="0" max="1" step="0.001" value={time} onChange={(event) => setTime(Number(event.target.value))} /><span>1.0 s</span></>}</footer>
+      <footer className="timeline">{physicsMode ? <><span>Causal chain</span><div className="live-indicator"><i />{physics.paused ? "Paused" : telemetry.awake ? "Awake" : "Dormant"}</div><span>{telemetry.steps} steps</span></> : <><span>0</span><input aria-label="Spatial timeline" type="range" min="0" max="1" step="0.001" value={time} onChange={(event) => setTime(Number(event.target.value))} /><span>1.0 s</span></>}</footer>
     </main>
   );
 }

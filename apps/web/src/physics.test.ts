@@ -1,47 +1,99 @@
 import { describe, expect, it } from "vitest";
 import {
   applyImpulse,
+  buildSomatotopicToken,
   createMembrane,
   membraneEnergy,
   resetMembrane,
   stepMembrane,
+  totalHarvestedEnergy,
 } from "./physics";
 
-const parameters = { waveSpeed: 2.4, damping: 0.3, dt: 1 / 120, spacing: 0.12 };
+const parameters = {
+  waveSpeedX: 18,
+  waveSpeedY: 12,
+  damping: 1.5,
+  dt: 1 / 1000,
+  spacingX: 0.02,
+  spacingY: 0.02,
+  boundary: "reflective" as const,
+  conversionEfficiency: 0.2,
+  wakeThresholdJoules: 1e-7,
+  detectionThreshold: 1e-6,
+};
 
-describe("membrane solver", () => {
+const geometry = {
+  spacingX: parameters.spacingX,
+  spacingY: parameters.spacingY,
+  waveSpeedX: parameters.waveSpeedX,
+  waveSpeedY: parameters.waveSpeedY,
+};
+
+describe("causal somatosensory solver", () => {
   it("requires a meaningful grid", () => {
     expect(() => createMembrane(2, 2)).toThrow();
-    expect(createMembrane(8, 6).current).toHaveLength(48);
+    expect(createMembrane(8, 6).displacement).toHaveLength(48);
   });
 
-  it("applies a bounded gaussian impulse and propagates it", () => {
+  it("converts an energy-bounded impact into propagation and harvested energy", () => {
     const state = createMembrane(15, 15);
-    applyImpulse(state, 7, 7, 1, 0.5);
-    const center = 7 * 15 + 7;
-    expect(state.current[center]).toBeCloseTo(1);
-    expect(state.current[0]).toBe(0);
+    const impactEnergy = 0.02;
+    applyImpulse(state, 7, 7, impactEnergy, 0.8);
+    expect(state.velocity[7 * 15 + 7]).toBeGreaterThan(0);
+    for (let index = 0; index < 20; index += 1) stepMembrane(state, parameters);
+    expect(membraneEnergy(state)).toBeGreaterThan(0);
+    expect(totalHarvestedEnergy(state)).toBeGreaterThan(0);
+    expect(totalHarvestedEnergy(state)).toBeLessThanOrEqual(
+      impactEnergy * parameters.conversionEfficiency + Number.EPSILON,
+    );
+    expect(state.awake).toBe(true);
+  });
 
-    stepMembrane(state, parameters);
-    expect(state.current[center - 1]).toBeGreaterThan(0);
-    expect(state.current[0]).toBe(0);
+  it("produces a normalized TDOA somatotopic token", () => {
+    const state = createMembrane(21, 21);
+    const sensors: Array<[number, number]> = [[4, 4], [16, 4], [4, 16], [16, 16], [10, 10]];
+    applyImpulse(state, 8, 12, 0.05, 0.7);
+    for (let index = 0; index < 120; index += 1) stepMembrane(state, parameters);
+    const token = buildSomatotopicToken(state, sensors, geometry);
+    expect(token).not.toBeNull();
+    expect(token?.eventClass).toBe("impact");
+    expect(token?.modality).toBe("mechanical");
+    expect(token?.bodyCoordinates[0]).toBeGreaterThanOrEqual(0);
+    expect(token?.bodyCoordinates[0]).toBeLessThanOrEqual(1);
+    expect(token?.bodyCoordinates[1]).toBeGreaterThanOrEqual(0);
+    expect(token?.bodyCoordinates[1]).toBeLessThanOrEqual(1);
+    expect(token?.sensorArrivals.length).toBeGreaterThanOrEqual(3);
+    expect(token?.localizationRmseSeconds).toBeGreaterThanOrEqual(0);
   });
 
   it("stays finite under hostile parameters", () => {
     const state = createMembrane(20, 12);
     applyImpulse(state, 10, 6, 20);
     for (let index = 0; index < 500; index += 1) {
-      stepMembrane(state, { waveSpeed: 1e9, damping: -10, dt: 1, spacing: 0 });
+      stepMembrane(state, {
+        ...parameters,
+        waveSpeedX: 1e9,
+        waveSpeedY: 1e9,
+        damping: -10,
+        dt: 1,
+        spacingX: 0,
+        spacingY: 0,
+      });
     }
-    expect(Array.from(state.current).every(Number.isFinite)).toBe(true);
+    expect(Array.from(state.displacement).every(Number.isFinite)).toBe(true);
+    expect(Array.from(state.velocity).every(Number.isFinite)).toBe(true);
+    expect(totalHarvestedEnergy(state)).toBeLessThanOrEqual(4 + Number.EPSILON);
   });
 
-  it("resets all state and reports energy", () => {
+  it("resets displacement, energy, arrivals and wake state", () => {
     const state = createMembrane(10, 10);
-    applyImpulse(state, 5, 5, 2);
-    expect(membraneEnergy(state)).toBeGreaterThan(0);
+    applyImpulse(state, 5, 5, 0.02);
+    for (let index = 0; index < 10; index += 1) stepMembrane(state, parameters);
     resetMembrane(state);
     expect(membraneEnergy(state)).toBe(0);
+    expect(totalHarvestedEnergy(state)).toBe(0);
+    expect(state.awake).toBe(false);
+    expect(state.inputEnergyJoules).toBe(0);
+    expect(Array.from(state.arrivalTimeSeconds).every((value) => value === Number.POSITIVE_INFINITY)).toBe(true);
   });
 });
-
