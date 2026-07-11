@@ -22,6 +22,13 @@ const parameters = {
   detectionThreshold: 1e-6,
 };
 
+const geometry = {
+  spacingX: parameters.spacingX,
+  spacingY: parameters.spacingY,
+  waveSpeedX: parameters.waveSpeedX,
+  waveSpeedY: parameters.waveSpeedY,
+};
+
 describe("causal somatosensory solver", () => {
   it("requires a meaningful grid", () => {
     expect(() => createMembrane(2, 2)).toThrow();
@@ -30,26 +37,33 @@ describe("causal somatosensory solver", () => {
 
   it("converts an energy-bounded impact into propagation and harvested energy", () => {
     const state = createMembrane(15, 15);
-    applyImpulse(state, 7, 7, 0.02, 0.8);
+    const impactEnergy = 0.02;
+    applyImpulse(state, 7, 7, impactEnergy, 0.8);
     expect(state.velocity[7 * 15 + 7]).toBeGreaterThan(0);
     for (let index = 0; index < 20; index += 1) stepMembrane(state, parameters);
     expect(membraneEnergy(state)).toBeGreaterThan(0);
     expect(totalHarvestedEnergy(state)).toBeGreaterThan(0);
+    expect(totalHarvestedEnergy(state)).toBeLessThanOrEqual(
+      impactEnergy * parameters.conversionEfficiency + Number.EPSILON,
+    );
     expect(state.awake).toBe(true);
   });
 
-  it("produces a normalized somatotopic token after distributed arrivals", () => {
+  it("produces a normalized TDOA somatotopic token", () => {
     const state = createMembrane(21, 21);
     const sensors: Array<[number, number]> = [[4, 4], [16, 4], [4, 16], [16, 16], [10, 10]];
     applyImpulse(state, 8, 12, 0.05, 0.7);
     for (let index = 0; index < 120; index += 1) stepMembrane(state, parameters);
-    const token = buildSomatotopicToken(state, sensors);
+    const token = buildSomatotopicToken(state, sensors, geometry);
     expect(token).not.toBeNull();
+    expect(token?.eventClass).toBe("impact");
+    expect(token?.modality).toBe("mechanical");
     expect(token?.bodyCoordinates[0]).toBeGreaterThanOrEqual(0);
     expect(token?.bodyCoordinates[0]).toBeLessThanOrEqual(1);
     expect(token?.bodyCoordinates[1]).toBeGreaterThanOrEqual(0);
     expect(token?.bodyCoordinates[1]).toBeLessThanOrEqual(1);
     expect(token?.sensorArrivals.length).toBeGreaterThanOrEqual(3);
+    expect(token?.localizationRmseSeconds).toBeGreaterThanOrEqual(0);
   });
 
   it("stays finite under hostile parameters", () => {
@@ -68,6 +82,7 @@ describe("causal somatosensory solver", () => {
     }
     expect(Array.from(state.displacement).every(Number.isFinite)).toBe(true);
     expect(Array.from(state.velocity).every(Number.isFinite)).toBe(true);
+    expect(totalHarvestedEnergy(state)).toBeLessThanOrEqual(4 + Number.EPSILON);
   });
 
   it("resets displacement, energy, arrivals and wake state", () => {
@@ -78,6 +93,7 @@ describe("causal somatosensory solver", () => {
     expect(membraneEnergy(state)).toBe(0);
     expect(totalHarvestedEnergy(state)).toBe(0);
     expect(state.awake).toBe(false);
+    expect(state.inputEnergyJoules).toBe(0);
     expect(Array.from(state.arrivalTimeSeconds).every((value) => value === Number.POSITIVE_INFINITY)).toBe(true);
   });
 });
