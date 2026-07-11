@@ -1,55 +1,65 @@
-# Noyau physique interactif
+# Noyau somatosensoriel causal
 
-## Modèle livré
+## Statut
 
-Le Physics Lab utilise une équation d'onde bidimensionnelle discrétisée sur une grille régulière. Il est destiné à explorer qualitativement propagation, atténuation, localisation et activation distribuée : il ne prétend pas reproduire un matériau réel sans calibration.
+Le laboratoire implémente un modèle **conceptuel** aligné sur la chaîne fonctionnelle du brevet : stimulus mécanique, propagation, conversion énergétique bornée, stockage, réveil autonome, acquisition distribuée, localisation TDOA, encodage somatotopique et rétro-modulation de la sensibilité.
 
-Pour un déplacement vertical `u`, le Laplacien discret est :
+Il ne constitue pas encore une validation expérimentale du textile réel. Les paramètres matière, rendements, seuils, délais et erreurs de localisation devront être calibrés sur prototype avant tout passage au niveau `calibrated`.
 
-```text
-L(u[i,j]) = u[i-1,j] + u[i+1,j] + u[i,j-1] + u[i,j+1] - 4 u[i,j]
-```
-
-La mise à jour conserve une vitesse implicite entre deux états, applique une rétention exponentielle liée à l'amortissement, puis ajoute le terme de propagation :
+## Chaîne causale simulée
 
 ```text
-u_next = u + (u - u_previous) exp(-damping dt) + coefficient L(u)
+impact mécanique borné en joules
+  -> champ d'onde anisotrope X/Y
+  -> activité de N mécanorécepteurs
+  -> conversion piézo/triboélectrique simulée
+  -> stockage borné par E_impact × rendement
+  -> réveil au franchissement d'un seuil configurable
+  -> mesure des temps d'arrivée
+  -> localisation TDOA sur la carte somatotopique
+  -> jeton horodaté : classe, modalité, coordonnées, énergie, confiance
+  -> rétro-modulation de la sensibilité
 ```
 
-Le coefficient est borné à `0,49` pour respecter la condition de stabilité du schéma explicite 2D. Les valeurs de paramètres hostiles sont clampées afin que le solveur reste fini.
+La récupération d'énergie ne peut jamais dépasser l'énergie du stimulus multipliée par le rendement configuré. Cette contrainte remplace l'ancien cumul non causal qui pouvait créer artificiellement de l'énergie.
 
-## Paramètres
+## Modèle de propagation
 
-- grille : 52 × 34, soit 1 768 sommets ;
-- solveur : 120 Hz fixe ;
-- maximum : 8 sous-pas par frame pour éviter la spirale de rattrapage ;
-- frontière : bords fixes ;
-- excitation : impulsion gaussienne au point cliqué ;
-- capteurs : 8 × 6 instances échantillonnant le champ ;
-- télémétrie : nombre de pas et énergie numérique.
+Le substrat est discrétisé sur une grille de 52 × 34 nœuds. Le solveur utilise deux vitesses de propagation indépendantes `c_x` et `c_y`, afin de représenter une anisotropie simple du textile. Les coefficients numériques sont renormalisés lorsque la condition CFL explicite est dépassée :
 
-## Optimisations 3D
+```text
+(c_x dt / dx)² + (c_y dt / dy)² <= 0,49
+```
 
-- tableaux `Float32Array` préalloués et permutation des buffers sans allocation par pas ;
-- mise à jour en place des attributs position/couleur ;
-- normales recalculées une frame sur trois ;
-- capteurs rendus par `InstancedMesh` ;
-- sections PDF et symboles Python regroupés par type en `InstancedMesh` ;
-- DPR borné entre 1 et 1,75 ;
-- limite de 8 sous-pas et abandon contrôlé de l'arriéré ;
-- assets OBJ/GLB normalisés une seule fois et mis en cache par les loaders.
-- moteur 3D chargé à la demande : le bundle initial reste séparé du chunk Three.js.
+Les conditions aux limites disponibles sont : fixe, réfléchissante et absorbante simplifiée.
 
-## Ce que ce modèle ne prouve pas
+## Réseau somatotopique
 
-Le solveur actuel ne modélise pas encore anisotropie, viscoélasticité non linéaire, interfaces multicouches, précontrainte, plasticité, plis ou couplage électromécanique. Ces phénomènes devront être ajoutés sous forme de plugins versionnés, comparés à une vérité terrain et marqués `calibrated` uniquement après validation expérimentale.
+Le démonstrateur utilise 48 récepteurs en grille 8 × 6, conformément à la plage de 4 à 64 nœuds décrite dans le brevet. Chaque récepteur enregistre le premier franchissement du seuil de détection.
 
-## Prochaine montée en fidélité
+La localisation n'est plus un barycentre visuel. Elle minimise l'erreur entre les différences de temps d'arrivée observées et celles prédites pour chaque position candidate, en tenant compte des vitesses anisotropes et de la géométrie métrique du substrat.
 
-1. coefficients distincts selon X/Y pour l'anisotropie ;
-2. couches couplées avec impédances et réflexions ;
-3. carte spatiale de matériaux ;
-4. conditions aux limites configurables ;
-5. solveur Web Worker puis WebGPU pour les campagnes lourdes ;
-6. calibration par optimisation sur mesures physiques ;
-7. intervalles de confiance attachés aux champs reconstruits.
+Le jeton produit contient :
+
+- identifiant et horodatage de l'événement ;
+- classe `impact` et modalité `mechanical` ;
+- coordonnées corporelles normalisées ;
+- coordonnées de grille estimées ;
+- énergie d'impact et énergie récupérée ;
+- latence de réveil ;
+- arrivées par capteur ;
+- RMSE temporelle et confiance de localisation.
+
+## Boucle efférente
+
+Le paramètre `sensitivityGain` modifie le seuil effectif de détection. Il représente la rétro-modulation descendante prévue par le brevet. Cette première version ne modifie pas encore dynamiquement la topologie des capteurs ni les politiques de priorité énergétique.
+
+## Limites non masquées
+
+Le modèle ne simule pas encore explicitement les couches aramide/UHMWPE, PVDF/PTFE, le redressement Schottky GaN, les supercondensateurs MXene/graphène, les pertes électriques détaillées, la viscoélasticité non linéaire, les plis, la précontrainte, le bruit capteur, la dispersion fréquentielle ou une électronique neuromorphique réelle.
+
+Les valeurs affichées sont donc des paramètres d'ingénierie exploratoire, pas des mesures certifiées.
+
+## Validation nécessaire
+
+La prochaine étape physique doit comparer le simulateur à un banc d'essai : impacts instrumentés, énergie récupérée, temps de réveil, temps d'arrivée par nœud, erreur de localisation et consommation de la chaîne de traitement. Les écarts devront alimenter une calibration versionnée et des intervalles de confiance.
