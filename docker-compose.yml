@@ -10,6 +10,29 @@ services:
     volumes:
       - korev_data:/data
 
+  image-to-3d:
+    profiles: ["gpu"]
+    build: ./services/image-to-3d
+    environment:
+      KOREV_IMAGE3D_ARTIFACT_ROOT: /data/artifacts
+      KOREV_IMAGE3D_WORK_ROOT: /data/work
+      KOREV_IMAGE3D_TRIPOSR_PATH: /opt/providers/TripoSR
+      KOREV_IMAGE3D_INSTANTMESH_PATH: /opt/providers/InstantMesh
+      KOREV_IMAGE3D_MAX_CONCURRENT_JOBS: 1
+    ports:
+      - "8010:8010"
+    volumes:
+      - ./data/artifacts:/data/artifacts
+      - ./vendor/TripoSR:/opt/providers/TripoSR:ro
+      - ./vendor/InstantMesh:/opt/providers/InstantMesh:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   web:
     build: ./apps/web
     environment:
