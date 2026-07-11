@@ -34,9 +34,17 @@ export type SomatotopicToken = {
   bodyCoordinates: [number, number];
   localizedGridCoordinates: [number, number];
   confidence: number;
+  localizationRmseSeconds: number;
   harvestedEnergyJoules: number;
   wakeLatencySeconds: number | null;
   sensorArrivals: Array<{ sensorIndex: number; arrivalSeconds: number; amplitude: number }>;
+};
+
+export type LocalizationGeometry = {
+  spacingX: number;
+  spacingY: number;
+  waveSpeedX: number;
+  waveSpeedY: number;
 };
 
 export function createMembrane(columns: number, rows: number): SomatosensoryState {
@@ -134,9 +142,14 @@ export function stepMembrane(state: SomatosensoryState, parameters: Somatosensor
   const dt = Math.max(parameters.dt, 1e-6);
   const cx = Math.max(0, parameters.waveSpeedX);
   const cy = Math.max(0, parameters.waveSpeedY);
-  const maxStable = 0.49;
-  const coeffX = Math.min(maxStable, (cx * dt / dx) ** 2);
-  const coeffY = Math.min(maxStable, (cy * dt / dy) ** 2);
+  let coeffX = (cx * dt / dx) ** 2;
+  let coeffY = (cy * dt / dy) ** 2;
+  const cflSum = coeffX + coeffY;
+  if (cflSum > 0.49) {
+    const stabilityScale = 0.49 / cflSum;
+    coeffX *= stabilityScale;
+    coeffY *= stabilityScale;
+  }
   const damping = Math.exp(-Math.max(0, parameters.damping) * dt);
   const efficiency = Math.min(1, Math.max(0, parameters.conversionEfficiency));
 
@@ -155,8 +168,7 @@ export function stepMembrane(state: SomatosensoryState, parameters: Somatosensor
       nextDisplacement[index] = Number.isFinite(nextU) ? nextU : 0;
 
       const localMechanicalEnergy = 0.5 * nextV * nextV + 0.5 * (Math.abs(laplacianX) + Math.abs(laplacianY));
-      const harvested = localMechanicalEnergy * efficiency * dt;
-      state.harvestedJoules[index] += harvested;
+      state.harvestedJoules[index] += localMechanicalEnergy * efficiency * dt;
       if (state.arrivalTimeSeconds[index] === Number.POSITIVE_INFINITY && Math.abs(nextU) >= parameters.detectionThreshold) {
         state.arrivalTimeSeconds[index] = state.elapsedSeconds + dt;
       }
@@ -195,34 +207,55 @@ export function membraneEnergy(state: SomatosensoryState): number {
 export function buildSomatotopicToken(
   state: SomatosensoryState,
   sensors: Array<[number, number]>,
+  geometry: LocalizationGeometry,
 ): SomatotopicToken | null {
   const arrivals = sensors
     .map(([column, row], sensorIndex) => {
       const index = row * state.columns + column;
-      return {
-        sensorIndex,
-        column,
-        row,
-        arrivalSeconds: state.arrivalTimeSeconds[index],
-        amplitude: Math.abs(state.displacement[index]),
-      };
+      return { sensorIndex, column, row, arrivalSeconds: state.arrivalTimeSeconds[index], amplitude: Math.abs(state.displacement[index]) };
     })
     .filter((item) => Number.isFinite(item.arrivalSeconds));
   if (!state.awake || arrivals.length < 3) return null;
 
-  const weights = arrivals.map((item) => 1 / Math.max(item.arrivalSeconds, 1e-6));
-  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
-  const localizedColumn = arrivals.reduce((sum, item, index) => sum + item.column * weights[index], 0) / totalWeight;
-  const localizedRow = arrivals.reduce((sum, item, index) => sum + item.row * weights[index], 0) / totalWeight;
-  const spread = Math.max(...arrivals.map((item) => item.arrivalSeconds)) - Math.min(...arrivals.map((item) => item.arrivalSeconds));
-  const confidence = Math.max(0, Math.min(1, arrivals.length / sensors.length * Math.exp(-spread * 20)));
+  const observedMin = Math.min(...arrivals.map((item) => item.arrivalSeconds));
+  const observedRelative = arrivals.map((item) => item.arrivalSeconds - observedMin);
+  const speedX = Math.max(geometry.waveSpeedX, 1e-6);
+  const speedY = Math.max(geometry.waveSpeedY, 1e-6);
+  let bestColumn = 0;
+  let bestRow = 0;
+  let bestError = Number.POSITIVE_INFINITY;
 
+  for (let row = 0; row < state.rows; row += 1) {
+    for (let column = 0; column < state.columns; column += 1) {
+      const predicted = arrivals.map((sensor) => {
+        const dx = (sensor.column - column) * geometry.spacingX;
+        const dy = (sensor.row - row) * geometry.spacingY;
+        return Math.sqrt((dx / speedX) ** 2 + (dy / speedY) ** 2);
+      });
+      const predictedMin = Math.min(...predicted);
+      let squaredError = 0;
+      for (let index = 0; index < predicted.length; index += 1) {
+        const residual = (predicted[index] - predictedMin) - observedRelative[index];
+        squaredError += residual * residual;
+      }
+      const rmse = Math.sqrt(squaredError / predicted.length);
+      if (rmse < bestError) {
+        bestError = rmse;
+        bestColumn = column;
+        bestRow = row;
+      }
+    }
+  }
+
+  const sensorCoverage = arrivals.length / sensors.length;
+  const confidence = Math.max(0, Math.min(1, sensorCoverage * Math.exp(-bestError / 0.003)));
   return {
     eventId: `somato-${state.eventSequence}`,
     timestampSeconds: state.elapsedSeconds,
-    bodyCoordinates: [localizedColumn / (state.columns - 1), localizedRow / (state.rows - 1)],
-    localizedGridCoordinates: [localizedColumn, localizedRow],
+    bodyCoordinates: [bestColumn / (state.columns - 1), bestRow / (state.rows - 1)],
+    localizedGridCoordinates: [bestColumn, bestRow],
     confidence,
+    localizationRmseSeconds: bestError,
     harvestedEnergyJoules: totalHarvestedEnergy(state),
     wakeLatencySeconds: state.wakeTimeSeconds,
     sensorArrivals: arrivals.map(({ sensorIndex, arrivalSeconds, amplitude }) => ({ sensorIndex, arrivalSeconds, amplitude })),
