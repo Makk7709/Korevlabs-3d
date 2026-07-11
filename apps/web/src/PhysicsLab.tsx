@@ -13,31 +13,57 @@ import {
 } from "three";
 import {
   applyImpulse,
+  BoundaryMode,
+  buildSomatotopicToken,
   createMembrane,
   membraneEnergy,
   resetMembrane,
+  SomatotopicToken,
   stepMembrane,
+  totalHarvestedEnergy,
 } from "./physics";
 
 export type PhysicsParameters = {
-  waveSpeed: number;
+  waveSpeedX: number;
+  waveSpeedY: number;
   damping: number;
-  impulse: number;
+  impactEnergyJoules: number;
+  conversionEfficiency: number;
+  wakeThresholdJoules: number;
+  detectionThreshold: number;
+  boundary: BoundaryMode;
+  sensitivityGain: number;
   paused: boolean;
   resetVersion: number;
 };
 
 type Props = {
   parameters: PhysicsParameters;
-  onTelemetry: (energy: number, steps: number, fps: number) => void;
+  onTelemetry: (
+    energy: number,
+    harvestedJoules: number,
+    awake: boolean,
+    token: SomatotopicToken | null,
+    steps: number,
+    fps: number,
+  ) => void;
 };
 
 const COLUMNS = 52;
 const ROWS = 34;
-const WIDTH = 8;
-const DEPTH = 5;
-const FIXED_DT = 1 / 120;
-const MAX_SUBSTEPS = 8;
+const WIDTH_METERS = 0.8;
+const DEPTH_METERS = 0.5;
+const FIXED_DT = 1 / 1000;
+const MAX_SUBSTEPS = 24;
+
+const SENSOR_GRID = Array.from({ length: 48 }, (_, index): [number, number] => {
+  const row = Math.floor(index / 8);
+  const column = index % 8;
+  return [
+    Math.round((column + 0.5) / 8 * (COLUMNS - 1)),
+    Math.round((row + 0.5) / 6 * (ROWS - 1)),
+  ];
+});
 
 function buildGeometry(): BufferGeometry {
   const positions = new Float32Array(COLUMNS * ROWS * 3);
@@ -46,9 +72,9 @@ function buildGeometry(): BufferGeometry {
   for (let row = 0; row < ROWS; row += 1) {
     for (let column = 0; column < COLUMNS; column += 1) {
       const index = row * COLUMNS + column;
-      positions[index * 3] = column / (COLUMNS - 1) * WIDTH - WIDTH / 2;
+      positions[index * 3] = column / (COLUMNS - 1) * 8 - 4;
       positions[index * 3 + 1] = 0;
-      positions[index * 3 + 2] = row / (ROWS - 1) * DEPTH - DEPTH / 2;
+      positions[index * 3 + 2] = row / (ROWS - 1) * 5 - 2.5;
       colors.set([0.12, 0.16, 0.17], index * 3);
       if (column < COLUMNS - 1 && row < ROWS - 1) {
         const right = index + 1;
@@ -80,10 +106,10 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
 
   useEffect(() => {
     resetMembrane(state);
-    applyImpulse(state, COLUMNS * 0.52, ROWS * 0.48, parameters.impulse, 2.5);
+    applyImpulse(state, COLUMNS * 0.52, ROWS * 0.48, parameters.impactEnergyJoules, 2.5);
     accumulator.current = 0;
     totalSteps.current = 0;
-  }, [parameters.resetVersion, state, parameters.impulse]);
+  }, [parameters.resetVersion, state, parameters.impactEnergyJoules]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
@@ -94,10 +120,16 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
       let substeps = 0;
       while (accumulator.current >= FIXED_DT && substeps < MAX_SUBSTEPS) {
         stepMembrane(state, {
-          waveSpeed: parameters.waveSpeed,
+          waveSpeedX: parameters.waveSpeedX,
+          waveSpeedY: parameters.waveSpeedY,
           damping: parameters.damping,
           dt: FIXED_DT,
-          spacing: WIDTH / (COLUMNS - 1),
+          spacingX: WIDTH_METERS / (COLUMNS - 1),
+          spacingY: DEPTH_METERS / (ROWS - 1),
+          boundary: parameters.boundary,
+          conversionEfficiency: parameters.conversionEfficiency,
+          wakeThresholdJoules: parameters.wakeThresholdJoules,
+          detectionThreshold: parameters.detectionThreshold / Math.max(parameters.sensitivityGain, 1e-6),
         });
         accumulator.current -= FIXED_DT;
         substeps += 1;
@@ -110,10 +142,10 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
     const colorAttribute = geometry.getAttribute("color") as BufferAttribute;
     const positions = positionAttribute.array as Float32Array;
     const colors = colorAttribute.array as Float32Array;
-    for (let index = 0; index < state.current.length; index += 1) {
-      const displacement = state.current[index];
-      positions[index * 3 + 1] = displacement;
-      const intensity = Math.min(1, Math.abs(displacement) * 2.8);
+    for (let index = 0; index < state.displacement.length; index += 1) {
+      const displacement = state.displacement[index];
+      positions[index * 3 + 1] = displacement * 0.35;
+      const intensity = Math.min(1, Math.abs(displacement) * 1.8);
       color.setRGB(0.10 + intensity * 0.9, 0.16 + intensity * 0.48, 0.18 - intensity * 0.1);
       colors[index * 3] = color.r;
       colors[index * 3 + 1] = color.g;
@@ -125,38 +157,47 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
     if (frame.current % 3 === 0) geometry.computeVertexNormals();
 
     if (sensorRef.current) {
-      let sensor = 0;
-      for (let row = 0; row < 6; row += 1) {
-        for (let column = 0; column < 8; column += 1) {
-          const gridColumn = Math.round((column + 0.5) / 8 * (COLUMNS - 1));
-          const gridRow = Math.round((row + 0.5) / 6 * (ROWS - 1));
-          const index = gridRow * COLUMNS + gridColumn;
-          position.set(
-            gridColumn / (COLUMNS - 1) * WIDTH - WIDTH / 2,
-            state.current[index] + 0.035,
-            gridRow / (ROWS - 1) * DEPTH - DEPTH / 2,
-          );
-          matrix.makeTranslation(position.x, position.y, position.z);
-          sensorRef.current.setMatrixAt(sensor, matrix);
-          const activation = Math.min(1, Math.abs(state.current[index]) * 3.5);
-          color.setRGB(0.35 + activation * 0.65, 0.37 + activation * 0.4, 0.34 - activation * 0.2);
-          sensorRef.current.setColorAt(sensor, color);
-          sensor += 1;
-        }
-      }
+      SENSOR_GRID.forEach(([gridColumn, gridRow], sensor) => {
+        const index = gridRow * COLUMNS + gridColumn;
+        position.set(
+          gridColumn / (COLUMNS - 1) * 8 - 4,
+          state.displacement[index] * 0.35 + 0.035,
+          gridRow / (ROWS - 1) * 5 - 2.5,
+        );
+        matrix.makeTranslation(position.x, position.y, position.z);
+        sensorRef.current?.setMatrixAt(sensor, matrix);
+        const arrived = Number.isFinite(state.arrivalTimeSeconds[index]);
+        const activation = Math.min(1, Math.abs(state.displacement[index]) * 2.5);
+        color.setRGB(
+          arrived ? 0.45 + activation * 0.55 : 0.2,
+          arrived ? 0.58 + activation * 0.35 : 0.24,
+          arrived ? 0.12 : 0.25,
+        );
+        sensorRef.current?.setColorAt(sensor, color);
+      });
       sensorRef.current.instanceMatrix.needsUpdate = true;
       if (sensorRef.current.instanceColor) sensorRef.current.instanceColor.needsUpdate = true;
     }
+
     if (frame.current % 12 === 0) {
-      onTelemetry(membraneEnergy(state), totalSteps.current, smoothedFps.current);
+      onTelemetry(
+        membraneEnergy(state),
+        totalHarvestedEnergy(state),
+        state.awake,
+        buildSomatotopicToken(state, SENSOR_GRID),
+        totalSteps.current,
+        smoothedFps.current,
+      );
     }
   });
 
   function inject(event: ThreeEvent<PointerEvent>) {
     event.stopPropagation();
-    const column = (event.point.x + WIDTH / 2) / WIDTH * (COLUMNS - 1);
-    const row = (event.point.z + DEPTH / 2) / DEPTH * (ROWS - 1);
-    applyImpulse(state, column, row, parameters.impulse, 2.3);
+    const column = (event.point.x + 4) / 8 * (COLUMNS - 1);
+    const row = (event.point.z + 2.5) / 5 * (ROWS - 1);
+    resetMembrane(state);
+    applyImpulse(state, column, row, parameters.impactEnergyJoules, 2.3);
+    totalSteps.current = 0;
   }
 
   return (
