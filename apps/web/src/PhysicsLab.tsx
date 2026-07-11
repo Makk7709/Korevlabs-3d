@@ -11,8 +11,8 @@ import {
   Mesh,
   Vector3,
 } from "three";
+import { applyNormalizedEnergyImpulse, visualDisplacement } from "./impact";
 import {
-  applyImpulse,
   buildSomatotopicToken,
   createMembrane,
   membraneEnergy,
@@ -70,7 +70,6 @@ function buildGeometry(): BufferGeometry {
   const positions = new Float32Array(COLUMNS * ROWS * 3);
   const colors = new Float32Array(COLUMNS * ROWS * 3);
   const indices: number[] = [];
-
   for (let row = 0; row < ROWS; row += 1) {
     for (let column = 0; column < COLUMNS; column += 1) {
       const index = row * COLUMNS + column;
@@ -78,7 +77,6 @@ function buildGeometry(): BufferGeometry {
       positions[index * 3 + 1] = 0;
       positions[index * 3 + 2] = (row / (ROWS - 1)) * DISPLAY_DEPTH - DISPLAY_DEPTH / 2;
       colors.set([0.12, 0.16, 0.17], index * 3);
-
       if (column < COLUMNS - 1 && row < ROWS - 1) {
         const right = index + 1;
         const down = index + COLUMNS;
@@ -86,7 +84,6 @@ function buildGeometry(): BufferGeometry {
       }
     }
   }
-
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new BufferAttribute(positions, 3).setUsage(DynamicDrawUsage));
   geometry.setAttribute("color", new BufferAttribute(colors, 3).setUsage(DynamicDrawUsage));
@@ -110,7 +107,7 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
 
   useEffect(() => {
     resetMembrane(state);
-    applyImpulse(
+    applyNormalizedEnergyImpulse(
       state,
       COLUMNS * 0.52,
       ROWS * 0.48,
@@ -124,13 +121,10 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   useFrame((_root, delta) => {
-    smoothedFps.current =
-      smoothedFps.current * 0.9 + Math.min(240, 1 / Math.max(delta, 1e-4)) * 0.1;
-
+    smoothedFps.current = smoothedFps.current * 0.9 + Math.min(240, 1 / Math.max(delta, 1e-4)) * 0.1;
     if (!parameters.paused) {
       accumulator.current += Math.min(delta, 0.05);
       let substeps = 0;
-
       while (accumulator.current >= FIXED_DT && substeps < MAX_SUBSTEPS) {
         stepMembrane(state, {
           waveSpeedX: parameters.waveSpeedX,
@@ -142,14 +136,12 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
           boundary: parameters.boundary,
           conversionEfficiency: parameters.conversionEfficiency,
           wakeThresholdJoules: parameters.wakeThresholdJoules,
-          detectionThreshold:
-            parameters.detectionThreshold / Math.max(parameters.sensitivityGain, 1e-6),
+          detectionThreshold: parameters.detectionThreshold / Math.max(parameters.sensitivityGain, 1e-6),
         });
         accumulator.current -= FIXED_DT;
         substeps += 1;
         totalSteps.current += 1;
       }
-
       if (substeps === MAX_SUBSTEPS) accumulator.current = 0;
     }
 
@@ -159,14 +151,10 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
     const colors = colorAttribute.array as Float32Array;
 
     for (let index = 0; index < state.displacement.length; index += 1) {
-      const displacement = state.displacement[index];
-      positions[index * 3 + 1] = displacement * 0.35;
-      const intensity = Math.min(1, Math.abs(displacement) * 1.8);
-      color.setRGB(
-        0.1 + intensity * 0.9,
-        0.16 + intensity * 0.48,
-        0.18 - intensity * 0.1,
-      );
+      const displayY = visualDisplacement(state.displacement[index], parameters.impactEnergyJoules);
+      positions[index * 3 + 1] = displayY;
+      const intensity = Math.min(1, Math.abs(displayY) / 0.72);
+      color.setRGB(0.1 + intensity * 0.9, 0.16 + intensity * 0.48, 0.18 - intensity * 0.1);
       colors[index * 3] = color.r;
       colors[index * 3 + 1] = color.g;
       colors[index * 3 + 2] = color.b;
@@ -180,16 +168,16 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
     if (sensorRef.current) {
       SENSOR_GRID.forEach(([gridColumn, gridRow], sensor) => {
         const index = gridRow * COLUMNS + gridColumn;
+        const displayY = visualDisplacement(state.displacement[index], parameters.impactEnergyJoules);
         position.set(
           (gridColumn / (COLUMNS - 1)) * DISPLAY_WIDTH - DISPLAY_WIDTH / 2,
-          state.displacement[index] * 0.35 + 0.035,
+          displayY + 0.035,
           (gridRow / (ROWS - 1)) * DISPLAY_DEPTH - DISPLAY_DEPTH / 2,
         );
         matrix.makeTranslation(position.x, position.y, position.z);
         sensorRef.current?.setMatrixAt(sensor, matrix);
-
         const arrived = Number.isFinite(state.arrivalTimeSeconds[index]);
-        const activation = Math.min(1, Math.abs(state.displacement[index]) * 2.5);
+        const activation = Math.min(1, Math.abs(displayY) / 0.72);
         color.setRGB(
           arrived ? 0.45 + activation * 0.55 : 0.2,
           arrived ? 0.58 + activation * 0.35 : 0.24,
@@ -197,11 +185,8 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
         );
         sensorRef.current?.setColorAt(sensor, color);
       });
-
       sensorRef.current.instanceMatrix.needsUpdate = true;
-      if (sensorRef.current.instanceColor) {
-        sensorRef.current.instanceColor.needsUpdate = true;
-      }
+      if (sensorRef.current.instanceColor) sensorRef.current.instanceColor.needsUpdate = true;
     }
 
     if (frame.current % 12 === 0) {
@@ -224,13 +209,10 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
 
   function inject(event: ThreeEvent<PointerEvent>) {
     event.stopPropagation();
-    const column =
-      ((event.point.x + DISPLAY_WIDTH / 2) / DISPLAY_WIDTH) * (COLUMNS - 1);
-    const row =
-      ((event.point.z + DISPLAY_DEPTH / 2) / DISPLAY_DEPTH) * (ROWS - 1);
-
+    const column = ((event.point.x + DISPLAY_WIDTH / 2) / DISPLAY_WIDTH) * (COLUMNS - 1);
+    const row = ((event.point.z + DISPLAY_DEPTH / 2) / DISPLAY_DEPTH) * (ROWS - 1);
     resetMembrane(state);
-    applyImpulse(state, column, row, parameters.impactEnergyJoules, 2.3);
+    applyNormalizedEnergyImpulse(state, column, row, parameters.impactEnergyJoules, 2.3);
     accumulator.current = 0;
     totalSteps.current = 0;
   }
@@ -238,12 +220,7 @@ export default function PhysicsLab({ parameters, onTelemetry }: Props) {
   return (
     <group>
       <mesh ref={meshRef} geometry={geometry} onPointerDown={inject}>
-        <meshStandardMaterial
-          vertexColors
-          side={DoubleSide}
-          roughness={0.62}
-          metalness={0.08}
-        />
+        <meshStandardMaterial vertexColors side={DoubleSide} roughness={0.62} metalness={0.08} />
       </mesh>
       <instancedMesh ref={sensorRef} args={[undefined, undefined, 48]}>
         <sphereGeometry args={[0.055, 10, 8]} />
