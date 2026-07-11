@@ -1,35 +1,26 @@
 import {
-  Activity,
-  Box,
-  Braces,
-  CircleDot,
-  FileBox,
-  GitCompare,
-  Loader2,
-  Pause,
-  Play,
-  Plus,
-  RotateCcw,
-  ShieldCheck,
-  Upload,
+  Activity, Box, Braces, CircleDot, FileBox, GitCompare, Loader2,
+  Pause, Play, Plus, RotateCcw, ShieldCheck, Upload,
 } from "lucide-react";
 import {
-  ChangeEvent,
-  lazy,
-  ReactNode,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
+  ChangeEvent, lazy, ReactNode, Suspense, useCallback, useEffect, useMemo, useState,
 } from "react";
 import { ApiError, createClient } from "./api";
+import { formatEnergy } from "./impact";
 import type { PhysicsParameters } from "./PhysicsLab";
 import type { SomatotopicToken } from "./physics";
 import type { PatchProposal, Project, SceneObject, SourceRecord, Transform } from "./types";
 
 const SpatialScene = lazy(() => import("./SpatialScene"));
 type ApiState = "checking" | "online" | "offline";
+
+const IMPACT_PRESETS = [
+  { label: "Touch", joules: 0.02 },
+  { label: "Punch", joules: 120 },
+  { label: "9 mm", joules: 490 },
+  { label: "Rifle", joules: 3500 },
+  { label: "Extreme", joules: 100_000 },
+];
 
 function PanelTitle({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   return <div className="panel-title">{icon}<span>{children}</span></div>;
@@ -39,6 +30,14 @@ function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function energyToSlider(joules: number): number {
+  return Math.log10(Math.max(0.001, Math.min(1_000_000, joules)));
+}
+
+function sliderToEnergy(value: string): number {
+  return 10 ** Number(value);
 }
 
 export default function App() {
@@ -60,12 +59,13 @@ export default function App() {
     waveSpeedX: 42,
     waveSpeedY: 28,
     damping: 9,
-    impactEnergyJoules: 0.02,
+    impactEnergyJoules: 490,
     conversionEfficiency: 0.18,
     wakeThresholdJoules: 0.001,
     detectionThreshold: 0.0015,
     boundary: "reflective",
     sensitivityGain: 1,
+    slowMotion: 0.08,
     paused: false,
     resetVersion: 0,
   });
@@ -228,8 +228,8 @@ export default function App() {
         <Suspense fallback={<div className="viewport-loading"><Loader2 className="spin" />Loading 3D engine…</div>}>
           <SpatialScene objects={objects} selectedId={selected?.id ?? null} onSelect={setSelected} assetUrl={(sourceId) => project ? api.assetUrl(project.id, sourceId) : ""} time={time} physicsMode={physicsMode} physicsParameters={physics} onTelemetry={(energy, harvestedJoules, awake, token, steps, fps) => setTelemetry({ energy, harvestedJoules, awake, token, steps, fps })} />
         </Suspense>
-        <div className="viewport-label"><span>Revision {project?.current_scene.revision ?? 0}</span><span>{physicsMode ? "48 receptors" : `${objects.length} objects`}</span><span>{physicsMode ? "1 kHz causal solver" : "Source-driven"}</span></div>
-        {physicsMode && <div className="physics-hint">Click the substrate to inject an energy-bounded physical event</div>}
+        <div className="viewport-label"><span>Revision {project?.current_scene.revision ?? 0}</span><span>{physicsMode ? "48 receptors" : `${objects.length} objects`}</span><span>{physicsMode ? "1 kHz solver · slow motion" : "Source-driven"}</span></div>
+        {physicsMode && <div className="physics-hint">Click the substrate to inject the selected physical impact</div>}
         {apiState === "offline" && <div className="offline-overlay"><strong>API unavailable</strong><span>Start the FastAPI service on {apiUrl}.</span></div>}
       </section>
 
@@ -239,23 +239,26 @@ export default function App() {
           <h2>Energy → perception</h2>
           <dl>
             <div><dt>State</dt><dd className={telemetry.awake ? "gold" : ""}>{telemetry.awake ? "AWAKE" : "DORMANT"}</dd></div>
-            <div><dt>Mechanical energy</dt><dd>{telemetry.energy.toExponential(2)}</dd></div>
-            <div><dt>Harvested</dt><dd className="gold">{(telemetry.harvestedJoules * 1000).toFixed(3)} mJ</dd></div>
-            <div><dt>Wake threshold</dt><dd>{(physics.wakeThresholdJoules * 1000).toFixed(2)} mJ</dd></div>
+            <div><dt>Selected impact</dt><dd>{formatEnergy(physics.impactEnergyJoules)}</dd></div>
+            <div><dt>Mechanical field</dt><dd>{formatEnergy(telemetry.energy)}</dd></div>
+            <div><dt>Harvested</dt><dd className="gold">{formatEnergy(telemetry.harvestedJoules)}</dd></div>
+            <div><dt>Wake threshold</dt><dd>{formatEnergy(physics.wakeThresholdJoules)}</dd></div>
             <div><dt>Localized</dt><dd>{telemetry.token ? `${(telemetry.token.bodyCoordinates[0] * 100).toFixed(0)}%, ${(telemetry.token.bodyCoordinates[1] * 100).toFixed(0)}%` : "pending"}</dd></div>
             <div><dt>Confidence</dt><dd>{telemetry.token ? telemetry.token.confidence.toFixed(2) : "—"}</dd></div>
-            <div><dt>Solver</dt><dd>1 kHz</dd></div>
+            <div><dt>Render</dt><dd>{telemetry.fps.toFixed(0)} fps</dd></div>
           </dl>
           <div className="physics-controls">
+            <label><span>Impact energy <b>{formatEnergy(physics.impactEnergyJoules)}</b></span><input aria-label="Impact energy logarithmic scale" type="range" min="-3" max="6" step="0.01" value={energyToSlider(physics.impactEnergyJoules)} onChange={(event) => setPhysics((value) => ({ ...value, impactEnergyJoules: sliderToEnergy(event.target.value) }))} /></label>
+            <div className="impact-presets">{IMPACT_PRESETS.map((preset) => <button key={preset.label} onClick={() => setPhysics((value) => ({ ...value, impactEnergyJoules: preset.joules, resetVersion: value.resetVersion + 1 }))}>{preset.label}<small>{formatEnergy(preset.joules)}</small></button>)}</div>
+            <label><span>Slow motion <b>{physics.slowMotion.toFixed(2)}×</b></span><input type="range" min="0.01" max="1" step="0.01" value={physics.slowMotion} onChange={(event) => setPhysics((value) => ({ ...value, slowMotion: Number(event.target.value) }))} /></label>
             <label><span>Wave X <b>{physics.waveSpeedX.toFixed(0)} m/s</b></span><input type="range" min="5" max="100" step="1" value={physics.waveSpeedX} onChange={(event) => setPhysics((value) => ({ ...value, waveSpeedX: Number(event.target.value) }))} /></label>
             <label><span>Wave Y <b>{physics.waveSpeedY.toFixed(0)} m/s</b></span><input type="range" min="5" max="100" step="1" value={physics.waveSpeedY} onChange={(event) => setPhysics((value) => ({ ...value, waveSpeedY: Number(event.target.value) }))} /></label>
-            <label><span>Impact energy <b>{(physics.impactEnergyJoules * 1000).toFixed(1)} mJ</b></span><input type="range" min="0.001" max="0.1" step="0.001" value={physics.impactEnergyJoules} onChange={(event) => setPhysics((value) => ({ ...value, impactEnergyJoules: Number(event.target.value) }))} /></label>
             <label><span>Conversion <b>{(physics.conversionEfficiency * 100).toFixed(0)}%</b></span><input type="range" min="0.01" max="0.5" step="0.01" value={physics.conversionEfficiency} onChange={(event) => setPhysics((value) => ({ ...value, conversionEfficiency: Number(event.target.value) }))} /></label>
             <label><span>Efferent sensitivity <b>{physics.sensitivityGain.toFixed(2)}×</b></span><input type="range" min="0.25" max="4" step="0.05" value={physics.sensitivityGain} onChange={(event) => setPhysics((value) => ({ ...value, sensitivityGain: Number(event.target.value) }))} /></label>
             <label><span>Boundary</span><select value={physics.boundary} onChange={(event) => setPhysics((value) => ({ ...value, boundary: event.target.value as PhysicsParameters["boundary"] }))}><option value="fixed">fixed</option><option value="reflective">reflective</option><option value="absorbing">absorbing</option></select></label>
           </div>
-          <div className="physics-actions"><button onClick={() => setPhysics((value) => ({ ...value, paused: !value.paused }))}>{physics.paused ? <Play size={14} /> : <Pause size={14} />}{physics.paused ? "Resume" : "Pause"}</button><button onClick={() => setPhysics((value) => ({ ...value, resetVersion: value.resetVersion + 1 }))}><RotateCcw size={14} />Reset</button></div>
-          <div className="provenance"><strong>Patent scope implemented</strong><p>Energy-bounded impact, anisotropic propagation, distributed receptors, TDOA-style localization, autonomous wake threshold, somatotopic token and efferent sensitivity modulation. This remains a conceptual simulator until calibrated against a physical prototype.</p></div>
+          <div className="physics-actions"><button onClick={() => setPhysics((value) => ({ ...value, paused: !value.paused }))}>{physics.paused ? <Play size={14} /> : <Pause size={14} />}{physics.paused ? "Resume" : "Pause"}</button><button onClick={() => setPhysics((value) => ({ ...value, resetVersion: value.resetVersion + 1 }))}><RotateCcw size={14} />Reset / Fire</button></div>
+          <div className="provenance"><strong>Display versus physics</strong><p>The solver keeps joules and propagation separate from rendering. Vertical deformation is visually amplified and saturated so millijoule and megajoule events remain observable without changing their energy budget.</p></div>
         </> : <>
           <PanelTitle icon={<CircleDot size={16} />}>Inspector</PanelTitle>
           {selected ? <><h2>{selected.label}</h2><dl><div><dt>Type</dt><dd>{selected.kind}</dd></div><div><dt>Origin</dt><dd>{selected.inferred ? "Inferred" : "Extracted"}</dd></div><div><dt>Sources</dt><dd>{selected.source_refs.length}</dd></div></dl><div className="coordinates"><label>X<input type="number" step="0.1" value={draftTransform?.position[0] ?? 0} onChange={(event) => updatePosition(0, event.target.value)} /></label><label>Y<input type="number" step="0.1" value={draftTransform?.position[1] ?? 0} onChange={(event) => updatePosition(1, event.target.value)} /></label><label>Z<input type="number" step="0.1" value={draftTransform?.position[2] ?? 0} onChange={(event) => updatePosition(2, event.target.value)} /></label></div><div className="provenance"><strong>Provenance</strong>{selected.source_refs.length ? selected.source_refs.map((ref) => <p key={`${ref.source_sha256}-${ref.locator}`}>{ref.locator} · {ref.method} · {(ref.confidence * 100).toFixed(0)}%</p>) : <p>No source attached.</p>}</div><PanelTitle icon={<GitCompare size={16} />}>Controlled edit</PanelTitle><div className="patch-card"><span>{pendingPatch ? "Patch previewed" : "Preview required"}</span><p>{pendingPatch ? `Bound to revision ${pendingPatch.request.base_revision}.` : "Coordinates are never written before an explicit preview and approval."}</p><button onClick={() => void (pendingPatch ? applyPatch() : previewTransform())} disabled={busy}>{pendingPatch ? "Approve and apply" : "Preview transform patch"}</button></div></> : <div className="empty-card">Select an object in the scene or scene graph to inspect its provenance and edit it.</div>}

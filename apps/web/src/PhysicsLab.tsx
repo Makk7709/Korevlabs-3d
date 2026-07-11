@@ -1,254 +1,74 @@
 import { ThreeEvent, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
-import {
-  BufferAttribute,
-  BufferGeometry,
-  Color,
-  DoubleSide,
-  DynamicDrawUsage,
-  InstancedMesh,
-  Matrix4,
-  Mesh,
-  Vector3,
-} from "three";
-import {
-  applyImpulse,
-  buildSomatotopicToken,
-  createMembrane,
-  membraneEnergy,
-  resetMembrane,
-  stepMembrane,
-  totalHarvestedEnergy,
-} from "./physics";
+import { BufferAttribute, BufferGeometry, Color, DoubleSide, DynamicDrawUsage, InstancedMesh, Matrix4, Vector3 } from "three";
+import { applyNormalizedEnergyImpulse, visualDisplacement } from "./impact";
+import { buildSomatotopicToken, createMembrane, membraneEnergy, resetMembrane, stepMembrane, totalHarvestedEnergy } from "./physics";
 import type { BoundaryMode, SomatotopicToken } from "./physics";
 
 export type PhysicsParameters = {
-  waveSpeedX: number;
-  waveSpeedY: number;
-  damping: number;
-  impactEnergyJoules: number;
-  conversionEfficiency: number;
-  wakeThresholdJoules: number;
-  detectionThreshold: number;
-  boundary: BoundaryMode;
-  sensitivityGain: number;
-  paused: boolean;
-  resetVersion: number;
+  waveSpeedX: number; waveSpeedY: number; damping: number; impactEnergyJoules: number;
+  conversionEfficiency: number; wakeThresholdJoules: number; detectionThreshold: number;
+  boundary: BoundaryMode; sensitivityGain: number; slowMotion: number; paused: boolean; resetVersion: number;
 };
 
-type Props = {
-  parameters: PhysicsParameters;
-  onTelemetry: (
-    energy: number,
-    harvestedJoules: number,
-    awake: boolean,
-    token: SomatotopicToken | null,
-    steps: number,
-    fps: number,
-  ) => void;
-};
+type Props = { parameters: PhysicsParameters; onTelemetry: (energy: number, harvested: number, awake: boolean, token: SomatotopicToken | null, steps: number, fps: number) => void };
+const C = 52, R = 34, DW = 8, DD = 5, WM = 0.8, DM = 0.5, DT = 1 / 1000, MAX = 48;
+const SENSORS = Array.from({ length: 48 }, (_, i): [number, number] => [Math.round(((i % 8) + .5) / 8 * (C - 1)), Math.round((Math.floor(i / 8) + .5) / 6 * (R - 1))]);
 
-const COLUMNS = 52;
-const ROWS = 34;
-const DISPLAY_WIDTH = 8;
-const DISPLAY_DEPTH = 5;
-const WIDTH_METERS = 0.8;
-const DEPTH_METERS = 0.5;
-const FIXED_DT = 1 / 1000;
-const MAX_SUBSTEPS = 24;
-
-const SENSOR_GRID = Array.from({ length: 48 }, (_, index): [number, number] => {
-  const row = Math.floor(index / 8);
-  const column = index % 8;
-  return [
-    Math.round(((column + 0.5) / 8) * (COLUMNS - 1)),
-    Math.round(((row + 0.5) / 6) * (ROWS - 1)),
-  ];
-});
-
-function buildGeometry(): BufferGeometry {
-  const positions = new Float32Array(COLUMNS * ROWS * 3);
-  const colors = new Float32Array(COLUMNS * ROWS * 3);
-  const indices: number[] = [];
-
-  for (let row = 0; row < ROWS; row += 1) {
-    for (let column = 0; column < COLUMNS; column += 1) {
-      const index = row * COLUMNS + column;
-      positions[index * 3] = (column / (COLUMNS - 1)) * DISPLAY_WIDTH - DISPLAY_WIDTH / 2;
-      positions[index * 3 + 1] = 0;
-      positions[index * 3 + 2] = (row / (ROWS - 1)) * DISPLAY_DEPTH - DISPLAY_DEPTH / 2;
-      colors.set([0.12, 0.16, 0.17], index * 3);
-
-      if (column < COLUMNS - 1 && row < ROWS - 1) {
-        const right = index + 1;
-        const down = index + COLUMNS;
-        indices.push(index, down, right, right, down, down + 1);
-      }
-    }
+function geometry(): BufferGeometry {
+  const p = new Float32Array(C * R * 3), colors = new Float32Array(C * R * 3), idx: number[] = [];
+  for (let y = 0; y < R; y++) for (let x = 0; x < C; x++) {
+    const i = y * C + x;
+    p[i * 3] = x / (C - 1) * DW - DW / 2; p[i * 3 + 2] = y / (R - 1) * DD - DD / 2;
+    colors.set([.12, .16, .17], i * 3);
+    if (x < C - 1 && y < R - 1) idx.push(i, i + C, i + 1, i + 1, i + C, i + C + 1);
   }
-
-  const geometry = new BufferGeometry();
-  geometry.setAttribute("position", new BufferAttribute(positions, 3).setUsage(DynamicDrawUsage));
-  geometry.setAttribute("color", new BufferAttribute(colors, 3).setUsage(DynamicDrawUsage));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  return geometry;
+  const g = new BufferGeometry();
+  g.setAttribute("position", new BufferAttribute(p, 3).setUsage(DynamicDrawUsage));
+  g.setAttribute("color", new BufferAttribute(colors, 3).setUsage(DynamicDrawUsage));
+  g.setIndex(idx); g.computeVertexNormals(); return g;
 }
 
-export default function PhysicsLab({ parameters, onTelemetry }: Props) {
-  const meshRef = useRef<Mesh>(null);
-  const sensorRef = useRef<InstancedMesh>(null);
-  const state = useMemo(() => createMembrane(COLUMNS, ROWS), []);
-  const geometry = useMemo(buildGeometry, []);
-  const accumulator = useRef(0);
-  const totalSteps = useRef(0);
-  const frame = useRef(0);
-  const smoothedFps = useRef(60);
-  const matrix = useMemo(() => new Matrix4(), []);
-  const color = useMemo(() => new Color(), []);
-  const position = useMemo(() => new Vector3(), []);
+export default function PhysicsLab({ parameters: q, onTelemetry }: Props) {
+  const state = useMemo(() => createMembrane(C, R), []), g = useMemo(geometry, []);
+  const sensors = useRef<InstancedMesh>(null), acc = useRef(0), steps = useRef(0), frame = useRef(0), fps = useRef(60);
+  const matrix = useMemo(() => new Matrix4(), []), pos = useMemo(() => new Vector3(), []), color = useMemo(() => new Color(), []);
+  const fire = (x: number, y: number) => { resetMembrane(state); applyNormalizedEnergyImpulse(state, x, y, q.impactEnergyJoules, 2.3); acc.current = 0; steps.current = 0; };
 
-  useEffect(() => {
-    resetMembrane(state);
-    applyImpulse(
-      state,
-      COLUMNS * 0.52,
-      ROWS * 0.48,
-      parameters.impactEnergyJoules,
-      2.5,
-    );
-    accumulator.current = 0;
-    totalSteps.current = 0;
-  }, [parameters.resetVersion, state, parameters.impactEnergyJoules]);
-
-  useEffect(() => () => geometry.dispose(), [geometry]);
+  useEffect(() => { fire(C * .52, R * .48); }, [q.resetVersion, q.impactEnergyJoules]);
+  useEffect(() => () => g.dispose(), [g]);
 
   useFrame((_root, delta) => {
-    smoothedFps.current =
-      smoothedFps.current * 0.9 + Math.min(240, 1 / Math.max(delta, 1e-4)) * 0.1;
-
-    if (!parameters.paused) {
-      accumulator.current += Math.min(delta, 0.05);
-      let substeps = 0;
-
-      while (accumulator.current >= FIXED_DT && substeps < MAX_SUBSTEPS) {
-        stepMembrane(state, {
-          waveSpeedX: parameters.waveSpeedX,
-          waveSpeedY: parameters.waveSpeedY,
-          damping: parameters.damping,
-          dt: FIXED_DT,
-          spacingX: WIDTH_METERS / (COLUMNS - 1),
-          spacingY: DEPTH_METERS / (ROWS - 1),
-          boundary: parameters.boundary,
-          conversionEfficiency: parameters.conversionEfficiency,
-          wakeThresholdJoules: parameters.wakeThresholdJoules,
-          detectionThreshold:
-            parameters.detectionThreshold / Math.max(parameters.sensitivityGain, 1e-6),
-        });
-        accumulator.current -= FIXED_DT;
-        substeps += 1;
-        totalSteps.current += 1;
-      }
-
-      if (substeps === MAX_SUBSTEPS) accumulator.current = 0;
-    }
-
-    const positionAttribute = geometry.getAttribute("position") as BufferAttribute;
-    const colorAttribute = geometry.getAttribute("color") as BufferAttribute;
-    const positions = positionAttribute.array as Float32Array;
-    const colors = colorAttribute.array as Float32Array;
-
-    for (let index = 0; index < state.displacement.length; index += 1) {
-      const displacement = state.displacement[index];
-      positions[index * 3 + 1] = displacement * 0.35;
-      const intensity = Math.min(1, Math.abs(displacement) * 1.8);
-      color.setRGB(
-        0.1 + intensity * 0.9,
-        0.16 + intensity * 0.48,
-        0.18 - intensity * 0.1,
-      );
-      colors[index * 3] = color.r;
-      colors[index * 3 + 1] = color.g;
-      colors[index * 3 + 2] = color.b;
-    }
-
-    positionAttribute.needsUpdate = true;
-    colorAttribute.needsUpdate = true;
-    frame.current += 1;
-    if (frame.current % 3 === 0) geometry.computeVertexNormals();
-
-    if (sensorRef.current) {
-      SENSOR_GRID.forEach(([gridColumn, gridRow], sensor) => {
-        const index = gridRow * COLUMNS + gridColumn;
-        position.set(
-          (gridColumn / (COLUMNS - 1)) * DISPLAY_WIDTH - DISPLAY_WIDTH / 2,
-          state.displacement[index] * 0.35 + 0.035,
-          (gridRow / (ROWS - 1)) * DISPLAY_DEPTH - DISPLAY_DEPTH / 2,
-        );
-        matrix.makeTranslation(position.x, position.y, position.z);
-        sensorRef.current?.setMatrixAt(sensor, matrix);
-
-        const arrived = Number.isFinite(state.arrivalTimeSeconds[index]);
-        const activation = Math.min(1, Math.abs(state.displacement[index]) * 2.5);
-        color.setRGB(
-          arrived ? 0.45 + activation * 0.55 : 0.2,
-          arrived ? 0.58 + activation * 0.35 : 0.24,
-          arrived ? 0.12 : 0.25,
-        );
-        sensorRef.current?.setColorAt(sensor, color);
-      });
-
-      sensorRef.current.instanceMatrix.needsUpdate = true;
-      if (sensorRef.current.instanceColor) {
-        sensorRef.current.instanceColor.needsUpdate = true;
+    fps.current = fps.current * .9 + Math.min(240, 1 / Math.max(delta, 1e-4)) * .1;
+    if (!q.paused) {
+      acc.current += Math.min(delta, .05) * Math.max(.01, q.slowMotion);
+      let n = 0;
+      while (acc.current >= DT && n++ < MAX) {
+        stepMembrane(state, { waveSpeedX: q.waveSpeedX, waveSpeedY: q.waveSpeedY, damping: q.damping, dt: DT, spacingX: WM / (C - 1), spacingY: DM / (R - 1), boundary: q.boundary, conversionEfficiency: q.conversionEfficiency, wakeThresholdJoules: q.wakeThresholdJoules, detectionThreshold: q.detectionThreshold / Math.max(q.sensitivityGain, 1e-6) });
+        acc.current -= DT; steps.current++;
       }
     }
 
-    if (frame.current % 12 === 0) {
-      const token = buildSomatotopicToken(state, SENSOR_GRID, {
-        spacingX: WIDTH_METERS / (COLUMNS - 1),
-        spacingY: DEPTH_METERS / (ROWS - 1),
-        waveSpeedX: parameters.waveSpeedX,
-        waveSpeedY: parameters.waveSpeedY,
-      });
-      onTelemetry(
-        membraneEnergy(state),
-        totalHarvestedEnergy(state),
-        state.awake,
-        token,
-        totalSteps.current,
-        smoothedFps.current,
-      );
+    const pa = g.getAttribute("position") as BufferAttribute, ca = g.getAttribute("color") as BufferAttribute;
+    const pv = pa.array as Float32Array, cv = ca.array as Float32Array;
+    for (let i = 0; i < state.displacement.length; i++) {
+      const v = visualDisplacement(state.displacement[i], q.impactEnergyJoules), a = Math.min(1, Math.abs(v) / .72);
+      pv[i * 3 + 1] = v; color.setRGB(.1 + a * .9, .16 + a * .48, .18 - a * .1); cv.set([color.r, color.g, color.b], i * 3);
     }
+    pa.needsUpdate = ca.needsUpdate = true; frame.current++; if (frame.current % 3 === 0) g.computeVertexNormals();
+
+    if (sensors.current) {
+      SENSORS.forEach(([x, y], i) => {
+        const k = y * C + x, v = visualDisplacement(state.displacement[k], q.impactEnergyJoules), arrived = Number.isFinite(state.arrivalTimeSeconds[k]);
+        pos.set(x / (C - 1) * DW - DW / 2, v + .035, y / (R - 1) * DD - DD / 2); matrix.makeTranslation(pos.x, pos.y, pos.z); sensors.current?.setMatrixAt(i, matrix);
+        color.setRGB(arrived ? .9 : .2, arrived ? .75 : .24, arrived ? .1 : .25); sensors.current?.setColorAt(i, color);
+      });
+      sensors.current.instanceMatrix.needsUpdate = true; if (sensors.current.instanceColor) sensors.current.instanceColor.needsUpdate = true;
+    }
+
+    if (frame.current % 12 === 0) onTelemetry(membraneEnergy(state), totalHarvestedEnergy(state), state.awake, buildSomatotopicToken(state, SENSORS, { spacingX: WM / (C - 1), spacingY: DM / (R - 1), waveSpeedX: q.waveSpeedX, waveSpeedY: q.waveSpeedY }), steps.current, fps.current);
   });
 
-  function inject(event: ThreeEvent<PointerEvent>) {
-    event.stopPropagation();
-    const column =
-      ((event.point.x + DISPLAY_WIDTH / 2) / DISPLAY_WIDTH) * (COLUMNS - 1);
-    const row =
-      ((event.point.z + DISPLAY_DEPTH / 2) / DISPLAY_DEPTH) * (ROWS - 1);
-
-    resetMembrane(state);
-    applyImpulse(state, column, row, parameters.impactEnergyJoules, 2.3);
-    accumulator.current = 0;
-    totalSteps.current = 0;
-  }
-
-  return (
-    <group>
-      <mesh ref={meshRef} geometry={geometry} onPointerDown={inject}>
-        <meshStandardMaterial
-          vertexColors
-          side={DoubleSide}
-          roughness={0.62}
-          metalness={0.08}
-        />
-      </mesh>
-      <instancedMesh ref={sensorRef} args={[undefined, undefined, 48]}>
-        <sphereGeometry args={[0.055, 10, 8]} />
-        <meshStandardMaterial vertexColors roughness={0.32} metalness={0.2} />
-      </instancedMesh>
-    </group>
-  );
+  const inject = (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); fire((e.point.x + DW / 2) / DW * (C - 1), (e.point.z + DD / 2) / DD * (R - 1)); };
+  return <group><mesh geometry={g} onPointerDown={inject}><meshStandardMaterial vertexColors side={DoubleSide} roughness={.62} metalness={.08} /></mesh><instancedMesh ref={sensors} args={[undefined, undefined, 48]}><sphereGeometry args={[.055, 10, 8]} /><meshStandardMaterial vertexColors roughness={.32} metalness={.2} /></instancedMesh></group>;
 }
