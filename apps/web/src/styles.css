@@ -1,0 +1,77 @@
+:root {
+  color: #e8e9e4;
+  background: #08090a;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; overflow: hidden; }
+button { font: inherit; }
+
+.shell {
+  display: grid;
+  grid-template: 64px 1fr 52px / 245px minmax(420px, 1fr) 290px;
+  height: 100vh;
+  background: #08090a;
+}
+
+.topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  border-bottom: 1px solid #242728;
+  background: rgba(12, 14, 15, 0.97);
+}
+
+.brand, .status-row, .panel-title, .tree-row, .timeline { display: flex; align-items: center; }
+.brand { gap: 11px; }
+.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #d4ae32; color: #f2c94c; font-family: Georgia, serif; }
+.brand strong { display: block; font-size: 13px; letter-spacing: 0.17em; }
+.brand small { display: block; margin-top: 2px; color: #767e80; font-size: 10px; letter-spacing: 0.07em; }
+.status-row { gap: 10px; }
+.api-state, .maturity { padding: 7px 9px; border: 1px solid #2a2e30; border-radius: 4px; color: #8e9698; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.api-state.online { color: #8ed3a8; }
+.api-state.offline { color: #d88279; }
+.maturity { display: flex; align-items: center; gap: 6px; color: #e3c35d; }
+.status-row button { display: flex; gap: 7px; align-items: center; border: 1px solid #d4ae32; border-radius: 4px; padding: 8px 12px; background: #d4ae32; color: #111; font-size: 12px; font-weight: 700; }
+
+.left-panel, .right-panel { padding: 16px; background: #0d0f10; overflow-y: auto; }
+.left-panel { border-right: 1px solid #242728; }
+.right-panel { border-left: 1px solid #242728; }
+.panel-title { gap: 7px; margin: 3px 0 12px; color: #858d8f; font-size: 10px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.tree { margin-bottom: 28px; }
+.tree-row { gap: 8px; padding: 9px; border-left: 2px solid transparent; font-size: 12px; }
+.tree-row.selected { border-left-color: #d4ae32; background: #1a1b18; color: #f0d778; }
+.tree-child { margin-left: 22px; padding: 8px; border-left: 1px solid #292d2e; color: #92999b; font-size: 11px; }
+.tree-child span { float: right; color: #5f6668; }
+.empty-card, .provenance, .patch-card { padding: 12px; border: 1px solid #292d2e; border-radius: 5px; background: #121516; color: #767e80; font-size: 11px; line-height: 1.55; }
+
+.viewport { position: relative; min-width: 0; }
+.viewport-label { position: absolute; top: 14px; left: 14px; display: flex; gap: 6px; }
+.viewport-label span { padding: 5px 7px; border: 1px solid #2e3234; border-radius: 3px; background: rgba(10, 12, 13, .78); color: #798183; font-size: 9px; text-transform: uppercase; }
+
+.right-panel h2 { margin: 0 0 16px; font: 21px Georgia, serif; }
+dl { margin: 0 0 20px; }
+dl div { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #212425; font-size: 11px; }
+dt { color: #6d7476; }
+dd { margin: 0; color: #bcc1c2; }
+.gold { color: #e4c258; }
+.provenance { margin-bottom: 26px; border-left: 2px solid #d4ae32; }
+.provenance strong { color: #d8d9d4; }
+.provenance p, .patch-card p { margin: 6px 0 0; }
+.patch-card span { color: #e4c258; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.patch-card button { width: 100%; margin-top: 12px; padding: 8px; border: 1px solid #313638; background: #181b1c; color: #646b6d; }
+
+.timeline { grid-column: 1 / -1; gap: 12px; padding: 0 18px; border-top: 1px solid #242728; background: #0d0f10; color: #697173; font-size: 10px; }
+.track { flex: 1; height: 3px; background: #262a2b; }
+.progress { width: 38%; height: 100%; background: #d4ae32; box-shadow: 0 0 12px rgba(212, 174, 50, .5); }
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 190px 1fr; }
+  .right-panel { display: none; }
+  .status-row .api-state, .status-row .maturity { display: none; }
+}
+
