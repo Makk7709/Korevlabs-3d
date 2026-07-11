@@ -2,7 +2,7 @@ from enum import StrEnum
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, HttpUrl, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class ProviderName(StrEnum):
@@ -28,7 +28,7 @@ class ImageTo3DOptions(BaseModel):
 
 class ImageTo3DJobCreate(BaseModel):
     project_id: UUID
-    source_url: HttpUrl
+    source_uri: Annotated[str, StringConstraints(pattern=r"^artifact://[a-f0-9]{64}$")]
     source_sha256: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
     actor_id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")]
     options: ImageTo3DOptions = Field(default_factory=ImageTo3DOptions)
