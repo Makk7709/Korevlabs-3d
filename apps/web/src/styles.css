@@ -97,6 +97,10 @@ dd { margin: 0; color: #bcc1c2; }
 .physics-controls label span { display: flex; justify-content: space-between; color: #737c7e; font-size: 10px; }
 .physics-controls b { color: #9fc7cf; font-weight: 500; }
 .physics-controls input { width: 100%; accent-color: #55a7b7; }
+.impact-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.impact-presets button { display: grid; gap: 2px; padding: 8px; border: 1px solid #2e444b; border-radius: 4px; background: #11191c; color: #9fc7cf; font-size: 10px; text-align: left; }
+.impact-presets button:hover { border-color: #66b4c5; background: #16262b; }
+.impact-presets small { color: #657578; font-size: 8px; }
 .physics-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
 .physics-actions button { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border: 1px solid #35515a; border-radius: 4px; background: #142126; color: #9ec6ce; }
 .event { max-height: 180px; margin-top: 14px; padding: 10px; overflow: auto; border: 1px solid #242829; border-radius: 4px; background: #0a0c0d; color: #7f898b; font: 9px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
