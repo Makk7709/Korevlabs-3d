@@ -17,6 +17,13 @@ class MaturityLevel(StrEnum):
     CALIBRATED = "calibrated"
 
 
+class SourceKind(StrEnum):
+    PDF = "pdf"
+    PYTHON = "python"
+    OBJ = "obj"
+    GLB = "glb"
+
+
 class ProjectCreate(BaseModel):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
     maturity: MaturityLevel = MaturityLevel.CONCEPTUAL
@@ -44,7 +51,16 @@ class Transform(BaseModel):
 
 class SceneObject(BaseModel):
     id: Identifier
-    kind: Literal["group", "mesh", "sensor", "annotation", "field", "algorithm"]
+    kind: Literal[
+        "group",
+        "mesh",
+        "sensor",
+        "annotation",
+        "field",
+        "algorithm",
+        "document",
+        "section",
+    ]
     label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
     transform: Transform = Field(default_factory=Transform)
     properties: dict[str, Any] = Field(default_factory=dict)
@@ -89,6 +105,19 @@ class Project(BaseModel):
     name: str
     maturity: MaturityLevel
     current_scene: SceneRevision = Field(default_factory=SceneRevision)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class SourceRecord(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    project_id: UUID
+    filename: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=180)]
+    kind: SourceKind
+    media_type: str
+    sha256: Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+    size_bytes: int = Field(ge=1)
+    status: Literal["analyzed", "spatialized", "failed"] = "analyzed"
+    analysis: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

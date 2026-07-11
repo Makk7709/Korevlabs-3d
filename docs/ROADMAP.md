@@ -21,7 +21,7 @@ Critères de sortie :
 - patch périmé refusé ;
 - aucun secret ni contenu KOREV confidentiel dans le repo public.
 
-Statut initial : **livré dans la PR de bootstrap**.
+Statut : **livré**.
 
 ## Chantier 1 - Spatial Workbench V0
 
@@ -31,6 +31,8 @@ Livrables : viewport R3F, scene graph, inspector, gizmos, import GLB, niveaux co
 
 Preuves : scénario E2E chargeant une scène, modifiant un objet et restaurant la révision précédente.
 
+Statut : **verticale initiale livrée** - projets persistants, scène dynamique, sélection, inspector, provenance, import OBJ/GLB, timeline et patch transform preview/apply. Restent les gizmos directs et le diff visuel superposé.
+
 ## Chantier 2 - Ingestion contrôlée
 
 **Objectif** : accepter PDF, code, données et mesh sans leur faire confiance.
@@ -38,6 +40,8 @@ Preuves : scénario E2E chargeant une scène, modifiant un objet et restaurant l
 Livrables : upload signé, quarantaine, MIME réel, limites d'archives, workers rootless, adaptateurs PDF/AST/mesh, rapport d'ambiguïtés et SKIR v1.
 
 Preuves hostiles : PDF malformé, archive récursive, mesh géant, métadonnées injectées, unités absentes et tentative de path traversal.
+
+Statut : **en cours** - import local borné PDF/Python/OBJ/GLB, hash, validation de signature et analyse déterministe livrés. La quarantaine en worker rootless, l'antivirus, les archives et les uploads signés restent obligatoires avant production.
 
 ## Chantier 3 - Algorithm Graph
 
@@ -54,6 +58,8 @@ Preuves : remplacement d'un nœud sur une branche, comparaison des résultats et
 Livrables : manifeste de moteur, jobs bornés, graines, datasets, métriques, timeline, runs A/B, campagnes Monte-Carlo et artefacts Parquet/GLB.
 
 Preuves : reproduction bit-à-bit lorsque le moteur le garantit ; sinon tolérances documentées et testées.
+
+Statut : **noyau interactif initial livré** - membrane 2D déterministe, pas fixe, impulsions, amortissement, capteurs instanciés, télémétrie et tests de stabilité. Les campagnes persistantes, plugins et comparaisons A/B restent à livrer.
 
 ## Chantier 5 - CAEL Gateway
 
@@ -89,4 +95,3 @@ Livrables : SSO, RBAC/ABAC, chiffrement, rétention, observabilité, sauvegarde/
 ## Discipline de livraison
 
 Chaque chantier exige : ADR si nécessaire, contrat versionné, tests nominaux, tests hostiles, métriques de qualité, démonstration reproductible, revue de sécurité et documentation opérateur. Aucun chantier n'est marqué terminé sur la seule présence de code.
-

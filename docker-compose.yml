@@ -4,8 +4,11 @@ services:
     environment:
       KOREV_ENV: development
       KOREV_ALLOWED_ORIGINS: http://localhost:5173
+      KOREV_DATA_DIR: /data
     ports:
       - "8000:8000"
+    volumes:
+      - korev_data:/data
 
   web:
     build: ./apps/web
@@ -16,3 +19,5 @@ services:
     depends_on:
       - api
 
+volumes:
+  korev_data:

@@ -197,7 +197,7 @@ POST   /v1/experiments/{experiment_id}/runs
 GET    /v1/runs/{run_id}/artifacts
 ```
 
-Le V0 du repo implémente projets, scènes et cycle preview/apply avec verrou de révision.
+La verticale actuelle implémente projets persistants, sources PDF/Python/OBJ/GLB, spatialisation, scènes et cycle preview/apply avec verrou de révision. Les parseurs s'exécutent encore dans le service API de développement ; leur déplacement vers les sandboxes rootless reste un blocage explicite de production.
 
 ## 8. Observabilité et audit
 
@@ -238,4 +238,3 @@ L'architecture sera considérée opérationnelle lorsque :
 - une expérience est reproductible à partir de ses artefacts et versions ;
 - l'utilisateur peut revenir à toute révision sans perte d'audit ;
 - les tests hostiles couvrent permissions, quotas, formats, unités et conflits.
-

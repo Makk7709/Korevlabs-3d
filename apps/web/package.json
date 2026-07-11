@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
     "typecheck": "tsc -b --pretty false",
     "preview": "vite preview --host 0.0.0.0"
   },
@@ -23,7 +24,7 @@
     "@types/three": "^0.171.0",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^3.2.4"
   }
 }
-

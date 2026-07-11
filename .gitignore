@@ -10,5 +10,6 @@ __pycache__/
 .ruff_cache/
 .venv/
 .env
+.data/
 coverage.xml
 tmp/
