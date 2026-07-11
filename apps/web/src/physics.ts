@@ -13,6 +13,9 @@ export type SomatosensoryState = {
   awake: boolean;
   wakeTimeSeconds: number | null;
   eventSequence: number;
+  inputEnergyJoules: number;
+  storedEnergyJoules: number;
+  eventOrigin: [number, number] | null;
 };
 
 export type SomatosensoryStep = {
@@ -31,10 +34,13 @@ export type SomatosensoryStep = {
 export type SomatotopicToken = {
   eventId: string;
   timestampSeconds: number;
+  eventClass: "impact";
+  modality: "mechanical";
   bodyCoordinates: [number, number];
   localizedGridCoordinates: [number, number];
   confidence: number;
   localizationRmseSeconds: number;
+  impactEnergyJoules: number;
   harvestedEnergyJoules: number;
   wakeLatencySeconds: number | null;
   sensorArrivals: Array<{ sensorIndex: number; arrivalSeconds: number; amplitude: number }>;
@@ -65,6 +71,9 @@ export function createMembrane(columns: number, rows: number): SomatosensoryStat
     awake: false,
     wakeTimeSeconds: null,
     eventSequence: 0,
+    inputEnergyJoules: 0,
+    storedEnergyJoules: 0,
+    eventOrigin: null,
   };
 }
 
@@ -78,6 +87,9 @@ export function resetMembrane(state: SomatosensoryState): void {
   state.elapsedSeconds = 0;
   state.awake = false;
   state.wakeTimeSeconds = null;
+  state.inputEnergyJoules = 0;
+  state.storedEnergyJoules = 0;
+  state.eventOrigin = null;
 }
 
 export function applyImpulse(
@@ -101,6 +113,8 @@ export function applyImpulse(
       state.velocity[y * state.columns + x] += amplitude * weight;
     }
   }
+  state.inputEnergyJoules = safeEnergy;
+  state.eventOrigin = [column, row];
   state.eventSequence += 1;
 }
 
@@ -152,6 +166,7 @@ export function stepMembrane(state: SomatosensoryState, parameters: Somatosensor
   }
   const damping = Math.exp(-Math.max(0, parameters.damping) * dt);
   const efficiency = Math.min(1, Math.max(0, parameters.conversionEfficiency));
+  const maximumHarvestable = state.inputEnergyJoules * efficiency;
 
   nextDisplacement.fill(0);
   nextVelocity.fill(0);
@@ -167,8 +182,13 @@ export function stepMembrane(state: SomatosensoryState, parameters: Somatosensor
       nextVelocity[index] = Number.isFinite(nextV) ? nextV : 0;
       nextDisplacement[index] = Number.isFinite(nextU) ? nextU : 0;
 
-      const localMechanicalEnergy = 0.5 * nextV * nextV + 0.5 * (Math.abs(laplacianX) + Math.abs(laplacianY));
-      state.harvestedJoules[index] += localMechanicalEnergy * efficiency * dt;
+      const remainingBudget = Math.max(0, maximumHarvestable - state.storedEnergyJoules);
+      if (remainingBudget > 0) {
+        const localActivity = 0.5 * nextV * nextV + 0.5 * (Math.abs(laplacianX) + Math.abs(laplacianY));
+        const harvested = Math.min(remainingBudget, localActivity * efficiency * dt);
+        state.harvestedJoules[index] += harvested;
+        state.storedEnergyJoules += harvested;
+      }
       if (state.arrivalTimeSeconds[index] === Number.POSITIVE_INFINITY && Math.abs(nextU) >= parameters.detectionThreshold) {
         state.arrivalTimeSeconds[index] = state.elapsedSeconds + dt;
       }
@@ -182,16 +202,14 @@ export function stepMembrane(state: SomatosensoryState, parameters: Somatosensor
   state.nextVelocity = velocity;
   state.elapsedSeconds += dt;
 
-  if (!state.awake && totalHarvestedEnergy(state) >= Math.max(0, parameters.wakeThresholdJoules)) {
+  if (!state.awake && state.storedEnergyJoules >= Math.max(0, parameters.wakeThresholdJoules)) {
     state.awake = true;
     state.wakeTimeSeconds = state.elapsedSeconds;
   }
 }
 
 export function totalHarvestedEnergy(state: SomatosensoryState): number {
-  let energy = 0;
-  for (const value of state.harvestedJoules) energy += value;
-  return energy;
+  return state.storedEnergyJoules;
 }
 
 export function membraneEnergy(state: SomatosensoryState): number {
@@ -228,9 +246,9 @@ export function buildSomatotopicToken(
   for (let row = 0; row < state.rows; row += 1) {
     for (let column = 0; column < state.columns; column += 1) {
       const predicted = arrivals.map((sensor) => {
-        const dx = (sensor.column - column) * geometry.spacingX;
-        const dy = (sensor.row - row) * geometry.spacingY;
-        return Math.sqrt((dx / speedX) ** 2 + (dy / speedY) ** 2);
+        const deltaX = (sensor.column - column) * geometry.spacingX;
+        const deltaY = (sensor.row - row) * geometry.spacingY;
+        return Math.sqrt((deltaX / speedX) ** 2 + (deltaY / speedY) ** 2);
       });
       const predictedMin = Math.min(...predicted);
       let squaredError = 0;
@@ -252,11 +270,14 @@ export function buildSomatotopicToken(
   return {
     eventId: `somato-${state.eventSequence}`,
     timestampSeconds: state.elapsedSeconds,
+    eventClass: "impact",
+    modality: "mechanical",
     bodyCoordinates: [bestColumn / (state.columns - 1), bestRow / (state.rows - 1)],
     localizedGridCoordinates: [bestColumn, bestRow],
     confidence,
     localizationRmseSeconds: bestError,
-    harvestedEnergyJoules: totalHarvestedEnergy(state),
+    impactEnergyJoules: state.inputEnergyJoules,
+    harvestedEnergyJoules: state.storedEnergyJoules,
     wakeLatencySeconds: state.wakeTimeSeconds,
     sensorArrivals: arrivals.map(({ sensorIndex, arrivalSeconds, amplitude }) => ({ sensorIndex, arrivalSeconds, amplitude })),
   };
